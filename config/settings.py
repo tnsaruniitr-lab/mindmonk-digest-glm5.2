@@ -32,6 +32,7 @@ class AppConfig(BaseModel):
 
     poll_interval_minutes: int = 30
     min_duration_seconds: int = 1200
+    max_per_cycle: int = 3  # cap LLM calls per cycle (cost + rate limits)
     languages: list[str] = Field(default_factory=lambda: ["en"])
     notify_on_no_transcript: bool = False
     channels: list[ChannelConfig] = Field(default_factory=list)

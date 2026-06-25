@@ -86,13 +86,26 @@ class PostgresStore:
             self._conn.close()
 
     def is_processed(self, video_id: str) -> bool:
+        """True only if this video reached a terminal-SUCCESS state.
+
+        ``failed`` rows are NOT treated as processed — they should be retried
+        on subsequent cycles (e.g. after a bug fix or transient outage).
+        """
         with self._lock:
             with self._conn.cursor() as cur:
                 cur.execute(
-                    "SELECT 1 FROM processed_videos WHERE video_id = %s LIMIT 1",
+                    "SELECT 1 FROM processed_videos "
+                    "WHERE video_id = %s AND status IN ('done', 'skipped') LIMIT 1",
                     (video_id,),
                 )
                 return cur.fetchone() is not None
+
+    def reset_failed(self) -> int:
+        """Delete all ``failed`` rows so they reprocess next cycle. Returns count."""
+        with self._lock:
+            with self._conn.cursor() as cur:
+                cur.execute("DELETE FROM processed_videos WHERE status = 'failed'")
+                return cur.rowcount
 
     def get(self, video_id: str) -> ProcessedVideo | None:
         with self._lock:
@@ -201,12 +214,22 @@ class SQLiteStore:
             self._conn.close()
 
     def is_processed(self, video_id: str) -> bool:
+        """True only for terminal-success states; ``failed`` is retryable."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT 1 FROM processed_videos WHERE video_id = ? LIMIT 1",
+                "SELECT 1 FROM processed_videos "
+                "WHERE video_id = ? AND status IN ('done', 'skipped') LIMIT 1",
                 (video_id,),
             ).fetchone()
         return row is not None
+
+    def reset_failed(self) -> int:
+        """Delete all ``failed`` rows so they reprocess next cycle."""
+        with self._lock:
+            cur = self._conn.execute(
+                "DELETE FROM processed_videos WHERE status = 'failed'"
+            )
+            return cur.rowcount
 
     def get(self, video_id: str) -> ProcessedVideo | None:
         with self._lock:

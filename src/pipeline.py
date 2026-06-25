@@ -87,6 +87,8 @@ class Pipeline:
     def _process_channel(self, channel: Channel, stats: CycleStats) -> None:
         videos = youtube.poll_channel(channel)
         stats.polled += len(videos)
+        max_per_cycle = getattr(self.settings.app, "max_per_cycle", 3)
+        processed_this_cycle = 0
         for video in videos:
             if self.store.is_processed(video.video_id):
                 continue
@@ -99,6 +101,15 @@ class Pipeline:
                 stats.skipped += 1
                 log.info("Skipped (short-form): %s — %s", video.title, channel.name)
                 continue
+            # Cap processed videos per cycle to limit LLM cost + rate limits.
+            # Remaining new videos wait for the next cycle.
+            if processed_this_cycle >= max_per_cycle:
+                log.info(
+                    "Reached max_per_cycle=%d; deferring remaining new videos "
+                    "to next cycle", max_per_cycle,
+                )
+                break
+            processed_this_cycle += 1
             self._process_video(video, stats)
 
     def _process_video(self, video: Video, stats: CycleStats) -> None:
