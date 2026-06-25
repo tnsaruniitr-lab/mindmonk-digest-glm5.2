@@ -28,20 +28,20 @@ log = logging.getLogger(__name__)
 def get_transcript(
     video: Video,
     languages: list[str] | None = None,
-    groq_api_key: str | None = None,
+    openai_api_key: str | None = None,
     proxy: str | None = None,
 ) -> Transcript:
     """Fetch the best available transcript for a video.
 
     Cascade:
       1. yt-dlp caption extraction (free, instant) — preferred.
-      2. If no captions AND groq_api_key is set → Groq Whisper transcription.
+      2. If no captions AND openai_api_key is set → OpenAI Whisper transcription.
       3. Else raise NoTranscriptError.
 
     Args:
         video: the video to fetch for.
         languages: ordered preferred language codes, e.g. ["en"].
-        groq_api_key: optional Groq key enabling the Whisper fallback.
+        openai_api_key: optional OpenAI key enabling the Whisper fallback.
     """
     languages = languages or ["en"]
 
@@ -49,19 +49,19 @@ def get_transcript(
     try:
         return _get_captions(video, languages, proxy)
     except NoTranscriptError:
-        if not groq_api_key:
+        if not openai_api_key:
             raise
         log.info(
-            "No captions for %s; falling back to Groq Whisper transcription",
+            "No captions for %s; falling back to OpenAI Whisper transcription",
             video.video_id,
         )
 
-    # 2. Fallback: Groq Whisper (audio → text).
-    from .transcribe import transcribe_via_groq, TranscribeError
+    # 2. Fallback: OpenAI Whisper (audio → text).
+    from .transcribe import transcribe_via_openai, TranscribeError
     try:
-        return transcribe_via_groq(video, groq_api_key, languages, proxy)
+        return transcribe_via_openai(video, openai_api_key, languages, proxy)
     except TranscribeError as exc:
-        log.error("Groq transcription failed for %s: %s", video.video_id, exc)
+        log.error("OpenAI transcription failed for %s: %s", video.video_id, exc)
         raise NoTranscriptError(video.video_id) from exc
 
 

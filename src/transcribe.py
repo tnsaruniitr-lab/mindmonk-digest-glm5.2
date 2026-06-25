@@ -1,14 +1,14 @@
-"""Audio-based transcription fallback via Groq's Whisper API.
+"""Audio-based transcription fallback via OpenAI's Whisper API.
 
 Used when yt-dlp caption extraction fails (no captions, IP-blocked, etc.).
 This module downloads the video's audio with yt-dlp, splits it into ≤24MB
-chunks with ffmpeg (Groq's hard limit is 25MB/file), transcribes each chunk
-via Groq's Whisper large-v3 endpoint, and concatenates the text.
+chunks with ffmpeg (OpenAI's hard limit is 25MB/file), transcribes each chunk
+via OpenAI's whisper-1 endpoint, and concatenates the text.
 
 Flow:
-    video → yt-dlp audio (mp3, 32kbps mono) → ffmpeg chunk → Groq × N → text
+    video → yt-dlp audio (mp3, 32kbps mono) → ffmpeg chunk → OpenAI × N → text
 
-Cost: ~$0.17/hr of audio on Groq. A 2h podcast ≈ $0.34, split into ~2 chunks.
+Cost: $0.006/min of audio on OpenAI. A 2h podcast ≈ $0.72, split into ~2 chunks.
 """
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ from .models import Transcript, Video
 
 log = logging.getLogger(__name__)
 
-GROQ_STT_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-GROQ_MODEL = "whisper-large-v3"
-# Groq limit is 25MB; keep chunks under with margin.
+OPENAI_STT_URL = "https://api.openai.com/v1/audio/transcriptions"
+OPENAI_MODEL = "whisper-1"
+# OpenAI limit is 25MB; keep chunks under with margin.
 MAX_CHUNK_BYTES = 24 * 1024 * 1024  # 24 MiB
 # 32kbps mono produces ~4MB per 15min — so ~90min per 24MB chunk.
 AUDIO_OPTS = {
@@ -42,19 +42,19 @@ AUDIO_OPTS = {
 }
 
 
-def transcribe_via_groq(
+def transcribe_via_openai(
     video: Video,
     api_key: str,
     languages: list[str] | None = None,
     proxy: str | None = None,
 ) -> Transcript:
-    """Download audio, transcribe via Groq Whisper, return a Transcript.
+    """Download audio, transcribe via OpenAI Whisper, return a Transcript.
 
     Raises ``TranscribeError`` on any failure (download, chunk, API).
     """
     languages = languages or ["en"]
     if not api_key:
-        raise TranscribeError("GROQ_API_KEY is not set.")
+        raise TranscribeError("OPENAI_API_KEY is not set.")
 
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
@@ -65,13 +65,13 @@ def transcribe_via_groq(
             "Downloaded audio for %s: %.1f MB", video.video_id, size / 1e6
         )
 
-        # 2. Split into chunks under Groq's limit (if needed).
+        # 2. Split into chunks under OpenAI's limit (if needed).
         chunks = _chunk_audio(audio_path, tmpdir)
         log.info(
             "Transcribing %s in %d chunk(s)", video.video_id, len(chunks)
         )
 
-        # 3. Transcribe each chunk via Groq.
+        # 3. Transcribe each chunk via OpenAI Whisper.
         texts: list[str] = []
         for i, chunk in enumerate(chunks, 1):
             text = _transcribe_file(chunk, api_key, languages[0])
@@ -82,10 +82,10 @@ def transcribe_via_groq(
 
     full_text = " ".join(t.strip() for t in texts if t.strip())
     if not full_text:
-        raise TranscribeError("Groq returned empty transcript.")
+        raise TranscribeError("OpenAI returned empty transcript.")
 
     log.info(
-        "Groq transcription complete for %s: %d chars",
+        "OpenAI transcription complete for %s: %d chars",
         video.video_id,
         len(full_text),
     )
@@ -175,18 +175,18 @@ def _probe_duration(path: Path) -> float | None:
 
 
 def _transcribe_file(path: Path, api_key: str, language: str) -> str:
-    """Send one audio file to Groq Whisper, return the transcript text."""
+    """Send one audio file to OpenAI Whisper, return the transcript text."""
     headers = {"Authorization": f"Bearer {api_key}"}
     # Retry transient failures with backoff.
     for attempt in range(1, 4):
         try:
             with path.open("rb") as fh:
                 resp = requests.post(
-                    GROQ_STT_URL,
+                    OPENAI_STT_URL,
                     headers=headers,
                     files={"file": (path.name, fh, "audio/mpeg")},
                     data={
-                        "model": GROQ_MODEL,
+                        "model": OPENAI_MODEL,
                         "response_format": "json",
                         "language": language,
                         "temperature": "0",
@@ -197,11 +197,11 @@ def _transcribe_file(path: Path, api_key: str, language: str) -> str:
                 return resp.json().get("text", "")
             if resp.status_code == 429:
                 wait = 5 * attempt
-                log.warning("Groq 429, waiting %ds (attempt %d)", wait, attempt)
+                log.warning("OpenAI 429, waiting %ds (attempt %d)", wait, attempt)
                 time.sleep(wait)
                 continue
             raise TranscribeError(
-                f"Groq API error {resp.status_code}: {resp.text[:200]}"
+                f"OpenAI API error {resp.status_code}: {resp.text[:200]}"
             )
         except requests.RequestException as exc:
             if attempt == 3:

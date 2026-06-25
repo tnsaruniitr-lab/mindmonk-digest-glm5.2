@@ -95,7 +95,8 @@ class Settings(BaseModel):
     profile: Profile
     telegram: TelegramConfig
     llm: LLMConfig
-    groq_api_key: str = ""  # optional: enables Groq Whisper transcription fallback
+    groq_api_key: str = ""  # deprecated alias, kept for back-compat
+    openai_transcribe_key: str = ""  # OpenAI key for the Whisper transcription fallback
     proxy_url: str = ""  # optional: residential proxy for yt-dlp (dodges IP blocks)
     config_path: Path
     profile_path: Path
@@ -150,6 +151,7 @@ def load_settings() -> Settings:
             grader_model=os.getenv("GRADER_MODEL", ""),
         ),
         groq_api_key=os.getenv("GROQ_API_KEY", ""),
+        openai_transcribe_key=os.getenv("OPENAI_TRANSCRIBE_KEY", "") or os.getenv("OPENAI_API_KEY", ""),
         proxy_url=os.getenv("PROXY_URL", ""),
         config_path=config_path,
         profile_path=profile_path,
