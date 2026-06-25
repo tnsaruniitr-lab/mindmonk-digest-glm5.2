@@ -1,0 +1,12 @@
+# Railway configuration.
+# This service is a WORKER (long-running scheduler, no HTTP port), so we do
+# not set a healthcheck HTTP path. Railway will mark it healthy once the
+# process stays up.
+
+[deploy]
+# Start the daemon directly. DATABASE_URL, TELEGRAM_*, LLM_* come from Railway
+# variables at runtime.
+startCommand = "python main.py"
+# Restart promptly if the loop ever exits.
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 5
