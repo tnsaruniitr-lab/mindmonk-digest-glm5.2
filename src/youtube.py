@@ -152,3 +152,97 @@ def _parse_upload_date(value: str | None) -> datetime | None:
 
 class YouTubePollError(Exception):
     """Raised when channel polling fails."""
+
+
+class YouTubeResolveError(Exception):
+    """Raised when an on-demand video/channel resolution fails."""
+
+
+# --------------------------------------------------------------------------- #
+# On-demand resolution (for /fetch and /channel bot commands)
+# --------------------------------------------------------------------------- #
+def get_video(url: str) -> Video:
+    """Resolve a single video URL to a Video (with metadata, no download).
+
+    Accepts youtu.be/<id>, watch?v=<id>, or embed/<id>. Used by /fetch.
+    """
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "noplaylist": True,
+    }
+    with YoutubeDL(opts) as ydl:
+        try:
+            info = ydl.extract_info(url, download=False)
+        except Exception as exc:  # noqa: BLE001
+            raise YouTubeResolveError(f"Could not resolve video {url!r}: {exc}") from exc
+
+    if not info or not info.get("id"):
+        raise YouTubeResolveError(f"No video found at {url!r}")
+
+    video_id = info["id"]
+    title = info.get("title") or "(untitled)"
+    if info.get("live_status") in ("is_upcoming", "is_live"):
+        raise YouTubeResolveError("That video is live or upcoming — no transcript yet.")
+
+    channel = Channel(
+        name=info.get("channel") or info.get("uploader") or "YouTube",
+        url=info.get("channel_url") or info.get("uploader_url") or "",
+    )
+    return Video(
+        video_id=video_id,
+        title=title,
+        url=f"https://www.youtube.com/watch?v={video_id}",
+        duration_seconds=float(info.get("duration") or 0),
+        channel=channel,
+        upload_date=_parse_upload_date(info.get("upload_date")),
+    )
+
+
+def get_latest_video(channel_url: str) -> Video:
+    """Resolve a channel URL to its most recent uploaded video. Used by /channel.
+
+    Polls the channel's uploads and returns the newest one (skipping
+    live/upcoming). Accepts @handle, /channel/, /user/, /c/, or /videos URLs.
+    """
+    normalized = _ensure_videos_tab(channel_url)
+    channel = Channel(name=_derive_channel_name(channel_url), url=normalized)
+    videos = poll_channel(channel, lookback_days=365)  # broad; we want the latest
+    if not videos:
+        raise YouTubeResolveError(
+            f"No uploaded videos found at {channel_url!r}. "
+            "Check the URL — is it a channel with public uploads?"
+        )
+    # poll_channel returns newest-first already; but sort defensively by date.
+    latest = max(
+        videos,
+        key=lambda v: v.upload_date or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    return latest
+
+
+# --------------------------------------------------------------------------- #
+# URL normalization helpers
+# --------------------------------------------------------------------------- #
+def _ensure_videos_tab(url: str) -> str:
+    """Make sure a channel URL points to its /videos tab for clean polling."""
+    url = url.strip()
+    if "youtube.com" not in url and "youtu.be" not in url:
+        return url
+    if url.endswith("/videos"):
+        return url
+    return url.rstrip("/") + "/videos"
+
+
+def _derive_channel_name(url: str) -> str:
+    """Best-effort friendly name from a channel URL."""
+    import re
+
+    m = re.search(r"@([\w.\-]+)", url)
+    if m:
+        return m.group(1).replace("-", " ").replace("_", " ").title()
+    m = re.search(r"/(?:channel|user|c)/([^/?]+)", url)
+    if m:
+        return m.group(1).replace("-", " ").title()
+    return "Channel"

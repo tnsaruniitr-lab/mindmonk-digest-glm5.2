@@ -19,6 +19,10 @@ from .telegram import TelegramError, TelegramSender
 log = logging.getLogger(__name__)
 
 
+class OnDemandError(Exception):
+    """User-facing error from an on-demand (/fetch, /channel) summarization."""
+
+
 @dataclass
 class CycleStats:
     polled: int = 0
@@ -90,6 +94,69 @@ class Pipeline:
         except Exception:  # noqa: BLE001
             return None
         return None
+
+    # ------------------------------------------------------------------ #
+    # On-demand summarization (for /fetch and /channel bot commands)
+    # ------------------------------------------------------------------ #
+    def summarize_video(self, video: Video) -> str:
+        """Summarize a single video on demand and return the brief text.
+
+        Used by the bot's /fetch and /channel commands. Caches to the DB:
+        if the video was already summarized, returns the stored brief instantly.
+        Raises ``OnDemandError`` with a user-friendly message on any failure.
+        """
+        # Cache hit: already summarized before.
+        existing = self.store.get(video.video_id)
+        if existing and existing.status == "done" and existing.summary:
+            log.info("On-demand cache hit: %s", video.video_id)
+            return existing.summary
+
+        if not self._llm_configured:
+            raise OnDemandError(
+                "The LLM isn't configured yet (LLM_API_KEY unset), so I can't "
+                "summarize. Set it in Railway Variables and retry."
+            )
+
+        channel_name = video.channel.name
+        log.info("On-demand summarizing: %s — %s", video.title, channel_name)
+
+        # 1. Transcript.
+        try:
+            transcript = transcripts.get_transcript(
+                video, self.settings.app.languages
+            )
+        except transcripts.NoTranscriptError:
+            raise OnDemandError(
+                f"No transcript available for this video — it may not have "
+                f"captions.\n\n*{video.title}*\n{video.url}"
+            )
+        if not transcript.text.strip():
+            raise OnDemandError(
+                f"The transcript came back empty.\n\n*{video.title}*\n{video.url}"
+            )
+
+        # 2. Summarize.
+        try:
+            brief = self.summarizer.summarize(transcript, self.settings.profile)
+        except LLMError as exc:
+            self.store.mark_failed(video.video_id, channel_name, note=str(exc))
+            raise OnDemandError(
+                f"Summarization failed: `{exc}`\n\n*{video.title}*\n{video.url}"
+            ) from exc
+
+        # 3. Cache (but don't send — the bot delivers the return value).
+        self.store.mark_done(video.video_id, channel_name, summary=brief)
+        return brief
+
+    def fetch_video_by_url(self, url: str) -> str:
+        """Resolve a video URL and return its brief. For /fetch."""
+        video = youtube.get_video(url)
+        return self.summarize_video(video)
+
+    def fetch_latest_from_channel(self, channel_url: str) -> str:
+        """Resolve a channel's latest video and return its brief. For /channel."""
+        video = youtube.get_latest_video(channel_url)
+        return self.summarize_video(video)
 
     # ------------------------------------------------------------------ #
     def run_cycle(self) -> CycleStats:

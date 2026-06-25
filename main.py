@@ -102,15 +102,17 @@ def run_scheduled() -> int:
     # URL. Runs in a background thread alongside the scheduler + bot.
     start_web_server()
 
-    # Interactive bot: handles /add, /list, /status, /latest, pasted URLs.
-    # Runs in a background thread; shares the pipeline (status/latest) and a
-    # ChannelRegistry that persists channel changes back to CONFIG_YAML.
+    # Interactive bot: handles /add, /list, /status, /latest, /fetch, /channel.
+    # Runs in a background thread; shares the pipeline (status/latest/on-demand)
+    # and a ChannelRegistry that persists channel changes back to CONFIG_YAML.
     registry = ChannelRegistry(settings)
     bot = BotHandler(
         settings=settings,
         registry=registry,
         on_status=pipeline.status_report,
         on_latest=pipeline.latest_digest,
+        on_fetch=pipeline.fetch_video_by_url,
+        on_channel=pipeline.fetch_latest_from_channel,
     )
     try:
         bot.start()
