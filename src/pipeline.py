@@ -54,6 +54,44 @@ class Pipeline:
         self.store.close()
 
     # ------------------------------------------------------------------ #
+    # Helpers for the interactive bot (/status, /latest)
+    # ------------------------------------------------------------------ #
+    def status_report(self) -> str:
+        """Human-readable worker + DB status for the /status command."""
+        llm = (
+            f"{self.settings.llm.provider} / {self.settings.llm.model}"
+            if self._llm_configured
+            else "❌ not configured"
+        )
+        try:
+            recent = self.store.list_recent(limit=100)
+            done = sum(1 for r in recent if r.status == "done")
+            failed = sum(1 for r in recent if r.status == "failed")
+            skipped = sum(1 for r in recent if r.status == "skipped")
+        except Exception:  # noqa: BLE001
+            done = failed = skipped = 0
+        channels = self.settings.app.channels
+        return (
+            f"*Mindmonk status*\n"
+            f"Channels: {len(channels)}\n"
+            f"LLM: {llm}\n"
+            f"Poll interval: {self.settings.app.poll_interval_minutes} min\n"
+            f"Max/cycle: {self.settings.app.max_per_cycle}\n"
+            f"DB (last 100): ✅{done} done · ⏭{skipped} skipped · ❌{failed} failed"
+        )
+
+    def latest_digest(self) -> str | None:
+        """Return the most recent successfully-delivered digest, or None."""
+        try:
+            recent = self.store.list_recent(limit=20)
+            for row in recent:
+                if row.status == "done" and row.summary:
+                    return row.summary
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    # ------------------------------------------------------------------ #
     def run_cycle(self) -> CycleStats:
         """Run one full poll+process cycle across all channels."""
         stats = CycleStats()

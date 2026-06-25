@@ -24,6 +24,7 @@ from config.settings import load_settings
 from src.pipeline import Pipeline
 from src.summarizer import LLMError
 from src.telegram import TelegramError
+from src.bot import BotHandler, ChannelRegistry
 
 
 class ConfigError(Exception):
@@ -96,6 +97,21 @@ def run_scheduled() -> int:
 
     scheduler = BlockingScheduler()
 
+    # Interactive bot: handles /add, /list, /status, /latest, pasted URLs.
+    # Runs in a background thread; shares the pipeline (status/latest) and a
+    # ChannelRegistry that persists channel changes back to CONFIG_YAML.
+    registry = ChannelRegistry(settings)
+    bot = BotHandler(
+        settings=settings,
+        registry=registry,
+        on_status=pipeline.status_report,
+        on_latest=pipeline.latest_digest,
+    )
+    try:
+        bot.start()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("Bot handler did not start (non-fatal): %s", exc)
+
     def job() -> None:
         try:
             stats = pipeline.run_cycle()
@@ -110,6 +126,7 @@ def run_scheduled() -> int:
 
     def _shutdown(signum, _frame):  # noqa: ANN001
         log.info("Received signal %s, shutting down", signum)
+        bot.stop()
         scheduler.shutdown(wait=False)
 
     signal.signal(signal.SIGINT, _shutdown)
@@ -120,6 +137,7 @@ def run_scheduled() -> int:
     except (KeyboardInterrupt, SystemExit):
         pass
     finally:
+        bot.stop()
         if pipeline is not None:
             pipeline.close()
     return 0
