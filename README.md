@@ -1,4 +1,4 @@
-# Podcast Digest
+# Podcast Digest (Mindmonk — GLM-5.2 build)
 
 Watches your favorite YouTube channels for new **long-form** uploads, pulls their
 transcripts, and sends you a structured AI brief on Telegram.
