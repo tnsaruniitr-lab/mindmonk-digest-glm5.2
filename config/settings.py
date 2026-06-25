@@ -95,6 +95,7 @@ class Settings(BaseModel):
     profile: Profile
     telegram: TelegramConfig
     llm: LLMConfig
+    groq_api_key: str = ""  # optional: enables Groq Whisper transcription fallback
     config_path: Path
     profile_path: Path
     db_path: Path
@@ -147,6 +148,7 @@ def load_settings() -> Settings:
             model=os.getenv("LLM_MODEL", "gpt-4o-mini"),
             grader_model=os.getenv("GRADER_MODEL", ""),
         ),
+        groq_api_key=os.getenv("GROQ_API_KEY", ""),
         config_path=config_path,
         profile_path=profile_path,
         db_path=db_path,

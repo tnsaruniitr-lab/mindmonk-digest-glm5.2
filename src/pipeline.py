@@ -123,7 +123,8 @@ class Pipeline:
         # 1. Transcript.
         try:
             transcript = transcripts.get_transcript(
-                video, self.settings.app.languages
+                video, self.settings.app.languages,
+                groq_api_key=self.settings.groq_api_key,
             )
         except transcripts.NoTranscriptError:
             raise OnDemandError(
@@ -224,7 +225,8 @@ class Pipeline:
         # 1. Transcript.
         try:
             transcript = transcripts.get_transcript(
-                video, self.settings.app.languages
+                video, self.settings.app.languages,
+                groq_api_key=self.settings.groq_api_key,
             )
         except transcripts.NoTranscriptError:
             self.store.mark_skipped(

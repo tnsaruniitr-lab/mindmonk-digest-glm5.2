@@ -26,16 +26,46 @@ log = logging.getLogger(__name__)
 
 
 def get_transcript(
-    video: Video, languages: list[str] | None = None
+    video: Video,
+    languages: list[str] | None = None,
+    groq_api_key: str | None = None,
 ) -> Transcript:
-    """Fetch the best available transcript for a video via yt-dlp.
+    """Fetch the best available transcript for a video.
+
+    Cascade:
+      1. yt-dlp caption extraction (free, instant) — preferred.
+      2. If no captions AND groq_api_key is set → Groq Whisper transcription.
+      3. Else raise NoTranscriptError.
 
     Args:
         video: the video to fetch for.
         languages: ordered preferred language codes, e.g. ["en"].
+        groq_api_key: optional Groq key enabling the Whisper fallback.
     """
     languages = languages or ["en"]
-    # yt-dlp wants a single comma-joined --sub-langs and a primary lang code.
+
+    # 1. Try captions first.
+    try:
+        return _get_captions(video, languages)
+    except NoTranscriptError:
+        if not groq_api_key:
+            raise
+        log.info(
+            "No captions for %s; falling back to Groq Whisper transcription",
+            video.video_id,
+        )
+
+    # 2. Fallback: Groq Whisper (audio → text).
+    from .transcribe import transcribe_via_groq, TranscribeError
+    try:
+        return transcribe_via_groq(video, groq_api_key, languages)
+    except TranscribeError as exc:
+        log.error("Groq transcription failed for %s: %s", video.video_id, exc)
+        raise NoTranscriptError(video.video_id) from exc
+
+
+def _get_captions(video: Video, languages: list[str]) -> Transcript:
+    """Caption extraction via yt-dlp (the original method)."""
     sub_langs = ",".join(languages)
 
     with tempfile.TemporaryDirectory() as tmpdir:
