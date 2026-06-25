@@ -1,0 +1,30 @@
+# Podcast Digest systemd service.
+#
+# Install:
+#   sudo cp systemd/podcast-digest.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now podcast-digest
+#
+# Logs: journalctl -u podcast-digest -f
+
+[Unit]
+Description=Podcast Digest (YouTube -> transcript -> AI brief -> Telegram)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# >>> CHANGE THESE to your user and install path <<<
+User=REPLACE_WITH_YOUR_USERNAME
+WorkingDirectory=/opt/podcast-digest
+# Use the venv python if you created one, e.g. /opt/podcast-digest/.venv/bin/python
+ExecStart=/opt/podcast-digest/.venv/bin/python /opt/podcast-digest/main.py
+
+Restart=on-failure
+RestartSec=30
+
+# Keep the process environment minimal; secrets live in /opt/podcast-digest/.env
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

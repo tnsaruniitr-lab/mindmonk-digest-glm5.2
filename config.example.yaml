@@ -1,0 +1,25 @@
+# ===== Podcast Digest configuration =====
+# Copy this file to config.yaml and edit. (config.yaml is gitignored.)
+
+# How often to poll all channels for new uploads.
+poll_interval_minutes: 30
+
+# Long-form filter: only process videos at least this long (seconds).
+# 1200 = 20 minutes. Shorts and clips are filtered out automatically.
+min_duration_seconds: 1200
+
+# Preferred caption languages, in priority order. Falls back to
+# auto-generated captions and translation as needed.
+languages: ["en"]
+
+# If true, send a small "no transcript available" notice to Telegram
+# when a long-form video has no captions. If false, skip silently.
+notify_on_no_transcript: false
+
+# Your favorite channels. Use the channel's /videos URL, or the
+# @handle URL — both work. Give each a friendly name for logs/messages.
+channels:
+  - name: "Example Podcast"
+    url: "https://www.youtube.com/@examplepodcast/videos"
+  # - name: "Another Show"
+  #   url: "https://www.youtube.com/@anothershow/videos"

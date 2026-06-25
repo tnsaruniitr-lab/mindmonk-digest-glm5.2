@@ -1,0 +1,26 @@
+# ===== Your profile =====
+# Copy this file to profile.yaml and edit. (profile.yaml is gitignored.)
+#
+# This drives section 4 of the brief: the LLM matches the podcast's
+# ideas against this profile to produce tailormade learnings for YOU.
+# Be as specific as you like — richer fields yield sharper takeaways.
+
+# What you do professionally.
+profession: "Senior Backend Engineer"
+
+# Rough seniority / skill level, helps calibrate depth.
+skill_level: "Mid-Senior"
+
+# What you're working toward.
+goals:
+  - "Transition into ML engineering"
+  - "Launch a profitable side project"
+
+# Topics you care about and want surfaced from podcasts.
+interests:
+  - "Distributed systems"
+  - "Investing & personal finance"
+  - "Founders / startups"
+
+# What you're focused on right now. The LLM ties takeaways to this.
+current_focus: "Building a side project in Go; learning the MLOps space."

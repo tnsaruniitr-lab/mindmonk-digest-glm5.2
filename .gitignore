@@ -1,0 +1,22 @@
+# Secrets & personal config — never commit these
+.env
+config.yaml
+profile.yaml
+
+# Local state
+podcast-digest.db
+podcast-digest.db-journal
+podcast-digest.db-shm
+podcast-digest.db-wal
+*.log
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
