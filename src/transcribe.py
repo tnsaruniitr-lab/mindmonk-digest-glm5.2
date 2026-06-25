@@ -46,6 +46,7 @@ def transcribe_via_groq(
     video: Video,
     api_key: str,
     languages: list[str] | None = None,
+    proxy: str | None = None,
 ) -> Transcript:
     """Download audio, transcribe via Groq Whisper, return a Transcript.
 
@@ -58,7 +59,7 @@ def transcribe_via_groq(
     with tempfile.TemporaryDirectory() as tmp:
         tmpdir = Path(tmp)
         # 1. Download audio as a single low-bitrate mp3.
-        audio_path = _download_audio(video.video_id, tmpdir)
+        audio_path = _download_audio(video.video_id, tmpdir, proxy)
         size = audio_path.stat().st_size
         log.info(
             "Downloaded audio for %s: %.1f MB", video.video_id, size / 1e6
@@ -98,7 +99,9 @@ def transcribe_via_groq(
 
 
 # --------------------------------------------------------------------------- #
-def _download_audio(video_id: str, outdir: Path) -> Path:
+def _download_audio(
+    video_id: str, outdir: Path, proxy: str | None = None
+) -> Path:
     """Download audio as a low-bitrate mp3 (mono, 32kbps) to keep size down."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     outtmpl = str(outdir / "audio.%(ext)s")
@@ -111,6 +114,8 @@ def _download_audio(video_id: str, outdir: Path) -> Path:
         "preferredcodec": "mp3",
         "preferredquality": "32",
     }]
+    if proxy:
+        opts["proxy"] = proxy
     try:
         with YoutubeDL(opts) as ydl:
             ydl.download([url])

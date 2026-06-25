@@ -30,8 +30,15 @@ _EXTRACT_OPTS = {
 }
 
 
+def _with_proxy(opts: dict, proxy: str | None = None) -> dict:
+    """Return a copy of opts with the proxy applied if one is set."""
+    if proxy:
+        return {**opts, "proxy": proxy}
+    return dict(opts)
+
+
 def poll_channel(
-    channel: Channel, lookback_days: int = 14
+    channel: Channel, lookback_days: int = 14, proxy: str | None = None
 ) -> list[Video]:
     """List recent uploads from a channel, newest entries first.
 
@@ -42,7 +49,7 @@ def poll_channel(
     Raises ``YouTubePollError`` if extraction fails outright so the caller can
     log and continue to the next channel.
     """
-    opts = dict(_EXTRACT_OPTS)
+    opts = _with_proxy(_EXTRACT_OPTS, proxy)
     with YoutubeDL(opts) as ydl:
         try:
             info = ydl.extract_info(channel.url, download=False)
@@ -161,17 +168,17 @@ class YouTubeResolveError(Exception):
 # --------------------------------------------------------------------------- #
 # On-demand resolution (for /fetch and /channel bot commands)
 # --------------------------------------------------------------------------- #
-def get_video(url: str) -> Video:
+def get_video(url: str, proxy: str | None = None) -> Video:
     """Resolve a single video URL to a Video (with metadata, no download).
 
     Accepts youtu.be/<id>, watch?v=<id>, or embed/<id>. Used by /fetch.
     """
-    opts = {
+    opts = _with_proxy({
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "noplaylist": True,
-    }
+    }, proxy)
     with YoutubeDL(opts) as ydl:
         try:
             info = ydl.extract_info(url, download=False)
@@ -200,7 +207,7 @@ def get_video(url: str) -> Video:
     )
 
 
-def get_latest_video(channel_url: str) -> Video:
+def get_latest_video(channel_url: str, proxy: str | None = None) -> Video:
     """Resolve a channel URL to its most recent uploaded video. Used by /channel.
 
     Polls the channel's uploads and returns the newest one (skipping
@@ -208,7 +215,7 @@ def get_latest_video(channel_url: str) -> Video:
     """
     normalized = _ensure_videos_tab(channel_url)
     channel = Channel(name=_derive_channel_name(channel_url), url=normalized)
-    videos = poll_channel(channel, lookback_days=365)  # broad; we want the latest
+    videos = poll_channel(channel, lookback_days=365, proxy=proxy)  # broad; we want the latest
     if not videos:
         raise YouTubeResolveError(
             f"No uploaded videos found at {channel_url!r}. "

@@ -125,6 +125,7 @@ class Pipeline:
             transcript = transcripts.get_transcript(
                 video, self.settings.app.languages,
                 groq_api_key=self.settings.groq_api_key,
+                proxy=self.settings.proxy_url,
             )
         except transcripts.NoTranscriptError:
             raise OnDemandError(
@@ -151,12 +152,12 @@ class Pipeline:
 
     def fetch_video_by_url(self, url: str) -> str:
         """Resolve a video URL and return its brief. For /fetch."""
-        video = youtube.get_video(url)
+        video = youtube.get_video(url, proxy=self.settings.proxy_url)
         return self.summarize_video(video)
 
     def fetch_latest_from_channel(self, channel_url: str) -> str:
         """Resolve a channel's latest video and return its brief. For /channel."""
-        video = youtube.get_latest_video(channel_url)
+        video = youtube.get_latest_video(channel_url, proxy=self.settings.proxy_url)
         return self.summarize_video(video)
 
     # ------------------------------------------------------------------ #
@@ -191,7 +192,7 @@ class Pipeline:
 
     # ------------------------------------------------------------------ #
     def _process_channel(self, channel: Channel, stats: CycleStats) -> None:
-        videos = youtube.poll_channel(channel)
+        videos = youtube.poll_channel(channel, proxy=self.settings.proxy_url)
         stats.polled += len(videos)
         max_per_cycle = getattr(self.settings.app, "max_per_cycle", 3)
         processed_this_cycle = 0
@@ -227,6 +228,7 @@ class Pipeline:
             transcript = transcripts.get_transcript(
                 video, self.settings.app.languages,
                 groq_api_key=self.settings.groq_api_key,
+                proxy=self.settings.proxy_url,
             )
         except transcripts.NoTranscriptError:
             self.store.mark_skipped(

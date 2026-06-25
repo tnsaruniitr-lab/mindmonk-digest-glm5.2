@@ -96,6 +96,7 @@ class Settings(BaseModel):
     telegram: TelegramConfig
     llm: LLMConfig
     groq_api_key: str = ""  # optional: enables Groq Whisper transcription fallback
+    proxy_url: str = ""  # optional: residential proxy for yt-dlp (dodges IP blocks)
     config_path: Path
     profile_path: Path
     db_path: Path
@@ -149,6 +150,7 @@ def load_settings() -> Settings:
             grader_model=os.getenv("GRADER_MODEL", ""),
         ),
         groq_api_key=os.getenv("GROQ_API_KEY", ""),
+        proxy_url=os.getenv("PROXY_URL", ""),
         config_path=config_path,
         profile_path=profile_path,
         db_path=db_path,

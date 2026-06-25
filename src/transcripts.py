@@ -29,6 +29,7 @@ def get_transcript(
     video: Video,
     languages: list[str] | None = None,
     groq_api_key: str | None = None,
+    proxy: str | None = None,
 ) -> Transcript:
     """Fetch the best available transcript for a video.
 
@@ -46,7 +47,7 @@ def get_transcript(
 
     # 1. Try captions first.
     try:
-        return _get_captions(video, languages)
+        return _get_captions(video, languages, proxy)
     except NoTranscriptError:
         if not groq_api_key:
             raise
@@ -58,13 +59,15 @@ def get_transcript(
     # 2. Fallback: Groq Whisper (audio → text).
     from .transcribe import transcribe_via_groq, TranscribeError
     try:
-        return transcribe_via_groq(video, groq_api_key, languages)
+        return transcribe_via_groq(video, groq_api_key, languages, proxy)
     except TranscribeError as exc:
         log.error("Groq transcription failed for %s: %s", video.video_id, exc)
         raise NoTranscriptError(video.video_id) from exc
 
 
-def _get_captions(video: Video, languages: list[str]) -> Transcript:
+def _get_captions(
+    video: Video, languages: list[str], proxy: str | None = None
+) -> Transcript:
     """Caption extraction via yt-dlp (the original method)."""
     sub_langs = ",".join(languages)
 
@@ -81,6 +84,8 @@ def _get_captions(video: Video, languages: list[str]) -> Transcript:
             # Use the android client — most reliable against IP blocks.
             "extractor_args": {"youtube": {"player_client": ["android", "web"]}},
         }
+        if proxy:
+            opts["proxy"] = proxy
         with YoutubeDL(opts) as ydl:
             try:
                 ydl.download([video.video_id])
