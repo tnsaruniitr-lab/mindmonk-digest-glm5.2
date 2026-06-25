@@ -1,9 +1,13 @@
 """Transcript fetching via youtube-transcript-api.
 
-Tries the user's preferred languages in order, then falls back to any
-available transcript (including auto-generated). Returns the plain text
-concatenated from segments; segments are kept on the Transcript object
-for future use (e.g. timestamps).
+Targets the v1.x API where ``YouTubeTranscriptApi.fetch(video_id, languages)``
+returns a ``FetchedTranscript`` directly, and ``.list(video_id)`` returns a
+``TranscriptList`` for the manual→generated→translate fallback chain.
+
+Strategy (first success wins):
+  1. ``fetch()`` with preferred languages (handles manual + generated).
+  2. ``list()`` → translate any translatable transcript to the preferred lang.
+  3. Raise ``NoTranscriptError`` if nothing exists / captions disabled.
 """
 from __future__ import annotations
 
@@ -25,48 +29,53 @@ def get_transcript(
 ) -> Transcript:
     """Fetch the best available transcript for a video.
 
-    Strategy (first success wins):
-      1. Manual caption in any preferred language.
-      2. Auto-generated caption in any preferred language.
-      3. Any auto-generated caption, translated to the first preferred lang.
-      4. Raise ``NoTranscriptError`` if nothing exists / captions disabled.
-
     Args:
         video: the video to fetch for.
         languages: ordered preferred language codes, e.g. ["en", "en-US"].
     """
     languages = languages or ["en"]
-    try:
-        transcript_list = YouTubeTranscriptApi.list_transcripts(video.video_id)
-    except TranscriptsDisabled as exc:
-        raise NoTranscriptError(video.video_id) from exc
+    api = YouTubeTranscriptApi()
 
-    # 1 + 2: prefer manual, then generated, in the preferred languages.
+    # 1. Direct fetch — finds manual or generated in preferred languages.
     try:
-        transcript_obj = transcript_list.find_manually_created_transcript(
-            languages
-        )
-        is_generated = False
+        fetched = api.fetch(video.video_id, languages=languages)
+        return _to_transcript(video, fetched, languages[0], is_generated=False)
     except NoTranscriptFound:
-        try:
-            transcript_obj = transcript_list.find_generated_transcript(
-                languages
+        log.info(
+            "No caption in %s for %s; trying translation fallback",
+            languages, video.video_id,
+        )
+    except TranscriptsDisabled:
+        raise NoTranscriptError(video.video_id)
+
+    # 2. Fallback: list all transcripts, translate any to the preferred lang.
+    try:
+        transcript_list = api.list(video.video_id)
+    except (TranscriptsDisabled, NoTranscriptFound):
+        raise NoTranscriptError(video.video_id)
+
+    for tr in transcript_list:
+        if tr.is_translatable:
+            translated = tr.translate(languages[0]).fetch()
+            return _to_transcript(
+                video, translated, languages[0], is_generated=True
             )
-            is_generated = True
-        except NoTranscriptFound:
-            # 3: translate any available transcript to the preferred language.
-            any_transcript = next(iter(transcript_list), None)
-            if any_transcript is None or not any_transcript.is_translatable:
-                raise NoTranscriptError(video.video_id)
-            transcript_obj = any_transcript.translate(languages[0])
-            is_generated = True
 
-    fetched = transcript_obj.fetch()
-    lang = getattr(transcript_obj, "language_code", languages[0])
+    raise NoTranscriptError(video.video_id)
 
+
+def _to_transcript(
+    video: Video,
+    fetched,
+    language: str,
+    is_generated: bool,
+) -> Transcript:
+    """Build a Transcript from a FetchedTranscript (list of snippets)."""
+    snippets = list(fetched)
     text = "\n".join(
-        snippet.text.strip() for snippet in fetched if snippet.text.strip()
+        getattr(s, "text", "").strip() for s in snippets if getattr(s, "text", "")
     )
+    lang = getattr(fetched, "language", language) or language
     log.info(
         "Fetched transcript for %s (%d chars, %s)",
         video.video_id,
@@ -78,7 +87,7 @@ def get_transcript(
         text=text,
         language=lang,
         is_generated=is_generated,
-        segments=fetched if isinstance(fetched, list) else [],
+        segments=snippets,
     )
 
 
