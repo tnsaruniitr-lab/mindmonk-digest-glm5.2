@@ -37,7 +37,15 @@ class Pipeline:
     def __init__(self, settings: Settings):
         self.settings = settings
         self.store = Store(settings.db_path)
-        self.summarizer = Summarizer(settings.llm)
+        self.summarizer = None
+        try:
+            self.summarizer = Summarizer(settings.llm)
+        except LLMError:
+            # No/placeholder LLM key yet. Worker still starts and polls, but
+            # skips summarization. See run_cycle() for the user notice.
+            self._llm_configured = False
+        else:
+            self._llm_configured = True
         self.sender = TelegramSender(
             settings.telegram.bot_token, settings.telegram.chat_id
         )
@@ -49,6 +57,17 @@ class Pipeline:
     def run_cycle(self) -> CycleStats:
         """Run one full poll+process cycle across all channels."""
         stats = CycleStats()
+        if not self._llm_configured:
+            log.warning(
+                "LLM not configured (LLM_API_KEY unset). Skipping this cycle; "
+                "the worker stays up and will process once the key is set."
+            )
+            self._safe_send(
+                "⏳ Mindmonk worker is live and connected to Postgres, but "
+                "LLM_API_KEY is not set yet. Add it (LLM_PROVIDER, LLM_API_KEY, "
+                "LLM_MODEL) in Railway Variables and I'll start producing digests."
+            )
+            return stats
         for channel_cfg in self.settings.app.channels:
             channel = Channel(name=channel_cfg.name, url=channel_cfg.url)
             try:

@@ -109,6 +109,19 @@ def _load_yaml(path: Path) -> dict:
         return yaml.safe_load(fh) or {}
 
 
+def _load_yaml_preferring_env(env_name: str, path: Path) -> dict:
+    """Prefer an inline YAML env var (e.g. CONFIG_YAML); fall back to a file.
+
+    On Railway we ship config/profile as variables (no files in the image),
+    so CONFIG_YAML / PROFILE_YAML take precedence when present. Locally, the
+    file path is used instead.
+    """
+    inline = os.getenv(env_name, "").strip()
+    if inline:
+        return yaml.safe_load(inline) or {}
+    return _load_yaml(path)
+
+
 def load_settings() -> Settings:
     """Load .env, config.yaml and profile.yaml into a validated Settings."""
     load_dotenv(PROJECT_ROOT / ".env")
@@ -117,8 +130,8 @@ def load_settings() -> Settings:
     profile_path = Path(os.getenv("PROFILE_PATH", PROJECT_ROOT / "profile.yaml"))
     db_path = Path(os.getenv("DB_PATH", PROJECT_ROOT / "podcast-digest.db"))
 
-    app = AppConfig(**_load_yaml(config_path))
-    profile = Profile(**_load_yaml(profile_path))
+    app = AppConfig(**_load_yaml_preferring_env("CONFIG_YAML", config_path))
+    profile = Profile(**_load_yaml_preferring_env("PROFILE_YAML", profile_path))
 
     return Settings(
         app=app,
