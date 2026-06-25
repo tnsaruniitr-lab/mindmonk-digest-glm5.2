@@ -25,6 +25,7 @@ from src.pipeline import Pipeline
 from src.summarizer import LLMError
 from src.telegram import TelegramError
 from src.bot import BotHandler, ChannelRegistry
+from src.web import start_web_server
 
 
 class ConfigError(Exception):
@@ -96,6 +97,10 @@ def run_scheduled() -> int:
     )
 
     scheduler = BlockingScheduler()
+
+    # Web server: serves the landing page on $PORT so Railway exposes a public
+    # URL. Runs in a background thread alongside the scheduler + bot.
+    start_web_server()
 
     # Interactive bot: handles /add, /list, /status, /latest, pasted URLs.
     # Runs in a background thread; shares the pipeline (status/latest) and a
