@@ -26,6 +26,7 @@ import requests
 
 from config.settings import Settings
 from .models import LegacyChannel as Channel
+from .mt_store import MultiTenantStore
 
 log = logging.getLogger(__name__)
 
@@ -33,26 +34,33 @@ API_BASE = "https://api.telegram.org/bot{token}/{method}"
 
 
 class BotHandler:
-    """Long-polling command handler. Run via .start(); stops on .stop()."""
+    """Long-polling command handler. Run via .start(); stops on .stop().
+
+    Multi-tenant (Phase 1): every message resolves a user_id from the chat_id
+    via MultiTenantStore.get_or_create_user. Per-user operations (/add, /list,
+    /fetch) are scoped to that user_id.
+    """
 
     def __init__(
         self,
         settings: Settings,
-        registry: "ChannelRegistry",
-        on_status: Callable[[], str],
-        on_latest: Callable[[], str | None],
-        on_fetch: Callable[[str], str],
-        on_channel: Callable[[str], str],
+        mt_store: MultiTenantStore,
+        on_status: Callable[[int], str],
+        on_latest: Callable[[int], str | None],
+        on_fetch: Callable[[int, str], str],
+        on_channel: Callable[[int, str], str],
     ):
         self.settings = settings
-        self.registry = registry
+        self.mt_store = mt_store
         self._on_status = on_status
         self._on_latest = on_latest
         self._on_fetch = on_fetch
         self._on_channel = on_channel
         self._token = settings.telegram.bot_token
-        self._chat_id = settings.telegram.chat_id
-        self._offset = 0  # Telegram update offset for ack
+        # chat_id is no longer a single-owner restriction — multi-tenant.
+        # Kept for the legacy operator-only mode (empty = accept all users).
+        self._operator_chat_id = settings.telegram.chat_id
+        self._offset = 0
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
 
@@ -97,181 +105,214 @@ class BotHandler:
         msg = update.get("message") or update.get("edited_message")
         if not msg:
             return
-        chat_id = str(msg.get("chat", {}).get("id", ""))
+        chat = msg.get("chat", {})
+        chat_id = str(chat.get("id", ""))
+        from_user = msg.get("from", {})
+        telegram_user_id = str(from_user.get("id", chat_id))
         text = (msg.get("text") or "").strip()
-        # Only respond to the authorized owner.
-        if chat_id != self._chat_id:
-            log.warning(
-                "Ignoring message from unauthorized chat %s: %r",
-                chat_id,
-                text[:60],
-            )
+
+        # Multi-tenant: auto-create the user. Accept ALL users (not just the
+        # operator). The operator_chat_id is now just for admin-tier detection.
+        if not chat_id:
             return
+        try:
+            user_id = self.mt_store.get_or_create_user(chat_id, telegram_user_id)
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to resolve/create user for chat_id=%s", chat_id)
+            return
+
         if not text:
             return
-        log.info("Received message: %r", text[:100])
+        log.info("Received message from user_id=%s: %r", user_id, text[:100])
         try:
             if text.startswith("/"):
-                self._handle_command(text)
+                self._handle_command(user_id, chat_id, text)
             elif "youtube.com" in text or "youtu.be" in text:
-                # Pasted URL: route to /fetch if it's a video, /add if a channel.
                 if _is_video_url(text):
                     log.info("Routed pasted URL to /fetch")
-                    self._cmd_fetch(text)
+                    self._cmd_fetch(user_id, chat_id, text)
                 else:
                     log.info("Routed pasted URL to /add")
-                    self._cmd_add(text)
+                    self._cmd_add(user_id, chat_id, text)
             else:
                 log.info("Non-command, non-URL message ignored: %r", text[:60])
         except Exception:  # noqa: BLE001
             log.exception("Error handling update")
-            self.send("⚠️ Something went wrong handling that. Check logs.")
+            self.send(chat_id, "⚠️ Something went wrong handling that. Check logs.")
 
     # ------------------------------------------------------------------ #
-    def _handle_command(self, text: str) -> None:
+    def _handle_command(self, user_id: int, chat_id: str, text: str) -> None:
         parts = text.split(maxsplit=1)
         cmd = parts[0].lower().split("@")[0]  # strip @botname suffix
         arg = parts[1].strip() if len(parts) > 1 else ""
-        log.info("Dispatching command: %s arg=%r", cmd, arg[:60])
+        log.info("Dispatching command: %s arg=%r (user_id=%s)", cmd, arg[:60], user_id)
         dispatch = {
-            "/help": lambda: self._cmd_help(),
-            "/start": lambda: self._cmd_help(),
-            "/list": lambda: self._cmd_list(),
-            "/add": lambda: self._cmd_add(arg),
-            "/status": lambda: self._cmd_status(),
-            "/latest": lambda: self._cmd_latest(),
-            "/remove": lambda: self._cmd_remove(arg),
-            "/fetch": lambda: self._cmd_fetch(arg),
-            "/channel": lambda: self._cmd_channel(arg),
+            "/help": lambda: self._cmd_help(chat_id),
+            "/start": lambda: self._cmd_start(user_id, chat_id),
+            "/list": lambda: self._cmd_list(user_id, chat_id),
+            "/add": lambda: self._cmd_add(user_id, chat_id, arg),
+            "/status": lambda: self._cmd_status(user_id, chat_id),
+            "/latest": lambda: self._cmd_latest(user_id, chat_id),
+            "/remove": lambda: self._cmd_remove(user_id, chat_id, arg),
+            "/fetch": lambda: self._cmd_fetch(user_id, chat_id, arg),
+            "/channel": lambda: self._cmd_channel(user_id, chat_id, arg),
         }
         handler = dispatch.get(cmd)
         if handler:
             handler()
         else:
             log.warning("Unknown command: %s", cmd)
-            self.send(f"Unknown command: {cmd}\nType /help for the list.")
+            self.send(chat_id, f"Unknown command: {cmd}\nType /help for the list.")
 
     # ------------------------------------------------------------------ #
     # Commands
     # ------------------------------------------------------------------ #
-    def _run_async(self, ack_msg: str, fn: Callable[[], str]) -> None:
-        """Ack instantly, then run a slow fn in a thread and send its result.
-
-        Used by /fetch and /channel which take ~30-60s to summarize.
-        """
+    def _run_async(self, chat_id: str, ack_msg: str, fn: Callable[[], str]) -> None:
+        """Ack instantly, then run a slow fn in a thread and send its result."""
         log.info("Sending ack + starting async worker")
-        self.send(ack_msg)
+        self.send(chat_id, ack_msg)
 
         def _worker() -> None:
             try:
                 log.info("Async worker started: running pipeline")
                 result = fn()
                 log.info("Async worker done: %d chars to send", len(result))
-                delivered = self.send(result)
+                delivered = self.send(chat_id, result)
                 if delivered:
                     log.info("Async result delivered to Telegram")
                 else:
-                    log.error(
-                        "Async result FAILED to deliver to Telegram (send returned False)"
-                    )
+                    log.error("Async result FAILED to deliver to Telegram")
             except Exception as exc:  # noqa: BLE001
                 log.exception("Async command failed: %s", str(exc)[:200])
-                self.send(f"❌ {exc}")
+                self.send(chat_id, f"❌ {exc}")
 
         threading.Thread(target=_worker, name="on-demand", daemon=True).start()
 
-    def _cmd_fetch(self, arg: str) -> None:
+    def _cmd_start(self, user_id: int, chat_id: str) -> None:
+        """Onboarding: welcome + show help."""
+        stats = self.mt_store.user_stats(user_id)
+        self.send(
+            chat_id,
+            f"👋 *Welcome to Mindmonk!*\n\n"
+            f"I watch YouTube channels and send you sharp, structured briefs "
+            f"of new episodes.\n\n"
+            f"*Your account:* {stats['channels']} channel(s) subscribed\n\n"
+            f"Use /add <url> to subscribe to a channel, or /fetch <url> to "
+            f"summarize any video now. Type /help for all commands.",
+        )
+
+    def _cmd_fetch(self, user_id: int, chat_id: str, arg: str) -> None:
         url = arg.strip()
         if not url or "youtu" not in url:
-            self.send("Send a video URL, e.g.:\n/fetch https://youtu.be/VIDEO_ID")
-            return
-        self._run_async(
-            f"⏳ Fetching transcript + summarizing… (≈30-60s)\n{url}",
-            lambda: self._on_fetch(url),
-        )
-
-    def _cmd_channel(self, arg: str) -> None:
-        url = arg.strip()
-        if not url or "youtube.com" not in url:
             self.send(
-                "Send a channel URL, e.g.:\n/channel https://www.youtube.com/@handle"
+                chat_id, "Send a video URL, e.g.:\n/fetch https://youtu.be/VIDEO_ID"
             )
             return
         self._run_async(
-            f"⏳ Finding the latest video + summarizing… (≈30-60s)\n{url}",
-            lambda: self._on_channel(url),
+            chat_id,
+            f"⏳ Fetching transcript + summarizing… (≈30-60s)\n{url}",
+            lambda: self._on_fetch(user_id, url),
         )
 
-    def _cmd_help(self) -> None:
+    def _cmd_channel(self, user_id: int, chat_id: str, arg: str) -> None:
+        url = arg.strip()
+        if not url or "youtube.com" not in url:
+            self.send(
+                chat_id,
+                "Send a channel URL, e.g.:\n/channel https://www.youtube.com/@handle",
+            )
+            return
+        self._run_async(
+            chat_id,
+            f"⏳ Finding the latest video + summarizing… (≈30-60s)\n{url}",
+            lambda: self._on_channel(user_id, url),
+        )
+
+    def _cmd_help(self, chat_id: str) -> None:
         self.send(
+            chat_id,
             "*Mindmonk Digest* commands:\n"
             "/fetch <video url> — summarize one video now\n"
-            "/channel <channel url> — summarize the channel's latest video\n"
+            "/channel <channel url> — summarize a channel's latest video\n"
             "/add <url> — register a YouTube channel to watch\n"
-            "/list — show registered channels\n"
+            "/list — show your registered channels\n"
             "/remove <n> — remove channel #n from /list\n"
-            "/status — worker + DB stats\n"
-            "/latest — re-show the most recent digest\n"
+            "/status — your account stats\n"
+            "/latest — re-show your most recent digest\n"
             "/help — this message\n\n"
-            "_Tip: paste a video link to /fetch it, or a channel link to /add it._"
+            "_Tip: paste a video link to /fetch it, or a channel link to /add it._",
         )
 
-    def _cmd_list(self) -> None:
-        channels = self.registry.list_channels()
+    def _cmd_list(self, user_id: int, chat_id: str) -> None:
+        channels = self.mt_store.list_channels(user_id)
         if not channels:
-            self.send("No channels registered yet. Use /add <url>.")
+            self.send(chat_id, "No channels registered yet. Use /add <url>.")
             return
-        lines = ["*Registered channels:*"]
+        lines = ["*Your channels:*"]
         for i, ch in enumerate(channels, 1):
-            lines.append(f"{i}. {ch.name}\n   {ch.url}")
-        self.send("\n".join(lines))
+            lines.append(f"{i}. {ch['name']}\n   {ch['url']}")
+        self.send(chat_id, "\n".join(lines))
 
-    def _cmd_add(self, arg: str) -> None:
+    def _cmd_add(self, user_id: int, chat_id: str, arg: str) -> None:
         url = arg.strip()
         if not url or "youtube.com" not in url:
             self.send(
-                "Send a YouTube URL, e.g.:\n/add https://www.youtube.com/@channel/videos"
+                chat_id,
+                "Send a YouTube URL, e.g.:\n/add https://www.youtube.com/@channel/videos",
             )
             return
-        name = self.registry.add_channel(url)
-        self.send(
-            f"✅ Added: *{name}*\n{url}\n\nIt'll be polled on the next cycle (within 30 min)."
-        )
+        name = _derive_name(url)
+        normalized = _normalize_url(url)
+        created = self.mt_store.add_channel(user_id, name, normalized)
+        if created:
+            self.send(
+                chat_id,
+                f"✅ Added: *{name}*\n{normalized}\n\nPolled on the next cycle.",
+            )
+        else:
+            self.send(chat_id, f"You're already subscribed to *{name}*.")
 
-    def _cmd_remove(self, arg: str) -> None:
+    def _cmd_remove(self, user_id: int, chat_id: str, arg: str) -> None:
         try:
             idx = int(arg) - 1
         except ValueError:
-            self.send("Usage: /remove <n>  (n from /list)")
+            self.send(chat_id, "Usage: /remove <n>  (n from /list)")
             return
-        removed = self.registry.remove_channel(idx)
+        removed = self.mt_store.remove_channel(user_id, idx)
         if removed:
-            self.send(f"🗑 Removed: *{removed.name}*")
+            self.send(chat_id, f"🗑 Removed: *{removed['name']}*")
         else:
-            self.send("No channel at that index. Use /list to check.")
+            self.send(chat_id, "No channel at that index. Use /list to check.")
 
-    def _cmd_status(self) -> None:
-        self.send(self._on_status())
+    def _cmd_status(self, user_id: int, chat_id: str) -> None:
+        stats = self.mt_store.user_stats(user_id)
+        self.send(
+            chat_id,
+            f"*Your account*\n"
+            f"Channels: {stats['channels']}\n"
+            f"Digests: ✅{stats['done']} done · ⏭{stats['skipped']} skipped · ❌{stats['failed']} failed",
+        )
 
-    def _cmd_latest(self) -> None:
-        digest = self._on_latest()
+    def _cmd_latest(self, user_id: int, chat_id: str) -> None:
+        digest = self._on_latest(user_id)
         if digest:
-            self.send(digest)
+            self.send(chat_id, digest)
         else:
-            self.send("No digests produced yet.")
+            self.send(chat_id, "No digests produced yet.")
 
     # ------------------------------------------------------------------ #
-    def send(self, text: str) -> bool:
-        """Send text to Telegram, splitting if over the 4096-char limit.
+    def send(self, chat_id: str, text: str) -> bool:
+        """Send text to a specific chat, splitting if over the 4096-char limit.
 
         Returns True if all chunks sent successfully, False on any failure.
-        Uses the same splitter as the scheduled-digest path (telegram.py).
+        Multi-tenant: chat_id is the recipient (not a hardcoded operator id).
         """
         from .telegram import _split_message
 
         chunks = _split_message(text, 4000)  # safe margin under 4096
         log.info(
-            "Sending Telegram message (%d chars → %d chunk%s): %s",
+            "Sending Telegram message to chat %s (%d chars → %d chunk%s): %s",
+            chat_id,
             len(text),
             len(chunks),
             "s" if len(chunks) > 1 else "",
@@ -279,14 +320,14 @@ class BotHandler:
         )
         all_ok = True
         for chunk in chunks:
-            ok = self._send_chunk(chunk)
+            ok = self._send_chunk(chat_id, chunk)
             if not ok:
                 all_ok = False
         return all_ok
 
-    def _send_chunk(self, text: str) -> bool:
-        """Send one chunk. Returns True on success. Retries as plain text
-        if Markdown parsing fails (common for long technical briefs)."""
+    def _send_chunk(self, chat_id: str, text: str) -> bool:
+        """Send one chunk to a chat. Returns True on success. Retries as plain
+        text if Markdown parsing fails (common for long technical briefs)."""
         url = API_BASE.format(token=self._token, method="sendMessage")
         parse_mode = "Markdown"
         for attempt in range(1, 4):
@@ -294,7 +335,7 @@ class BotHandler:
                 resp = requests.post(
                     url,
                     json={
-                        "chat_id": self._chat_id,
+                        "chat_id": chat_id,
                         "text": text,
                         "parse_mode": parse_mode,
                         "disable_web_page_preview": True,

@@ -8,12 +8,13 @@ Run modes:
 Configuration comes from .env (secrets, provider) and the YAML files
 (config.yaml, profile.yaml). See .env.example / *.example.yaml.
 """
+
 from __future__ import annotations
 
 import argparse
 import logging
+import os
 import signal
-import sys
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from config.settings import load_settings
 from src.pipeline import Pipeline
 from src.summarizer import LLMError
 from src.telegram import TelegramError
-from src.bot import BotHandler, ChannelRegistry
+from src.bot import BotHandler
 from src.web import start_web_server
 from src.logging_config import configure_logging
 
@@ -89,29 +90,52 @@ def run_scheduled() -> int:
         log.error("Configuration error: %s", exc)
         return 2
     interval = settings.app.poll_interval_minutes
-    log.info(
-        "Starting scheduled mode; polling every %d minute(s)", interval
-    )
+    log.info("Starting scheduled mode; polling every %d minute(s)", interval)
 
     scheduler = BlockingScheduler()
 
     # Web server: serves the landing page on $PORT + debug endpoints.
-    # Runs in a background thread alongside the scheduler + bot.
-    from src.web import start_web_server, set_pipeline
+    from src.web import set_pipeline
+
     set_pipeline(pipeline)
     start_web_server()
 
-    # Interactive bot: handles /add, /list, /status, /latest, /fetch, /channel.
-    # Runs in a background thread; shares the pipeline (status/latest/on-demand)
-    # and a ChannelRegistry that persists channel changes back to CONFIG_YAML.
-    registry = ChannelRegistry(settings)
+    # Interactive bot: multi-tenant (Phase 1). Every command resolves a user_id
+    # from the chat_id via MultiTenantStore, then scopes operations per-user.
+    from src.mt_store import MultiTenantStore
+
+    mt_store = None
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    if db_url:
+        try:
+            mt_store = MultiTenantStore(db_url)
+            log.info("MultiTenantStore connected (multi-tenant mode)")
+        except Exception as exc:  # noqa: BLE001
+            log.warning("MultiTenantStore init failed (non-fatal): %s", exc)
+
     bot = BotHandler(
         settings=settings,
-        registry=registry,
-        on_status=pipeline.status_report,
-        on_latest=pipeline.latest_digest,
-        on_fetch=pipeline.fetch_video_by_url,
-        on_channel=pipeline.fetch_latest_from_channel,
+        mt_store=mt_store,
+        on_status=lambda uid: (
+            pipeline.status_report()
+            if mt_store is None
+            else _user_status(mt_store, uid)
+        ),
+        on_latest=lambda uid: (
+            pipeline.latest_digest()
+            if mt_store is None
+            else mt_store.latest_digest(uid)
+        ),
+        on_fetch=lambda uid, url: (
+            pipeline.fetch_video_for_user(uid, mt_store, url)
+            if mt_store
+            else pipeline.fetch_video_by_url(url)
+        ),
+        on_channel=lambda uid, url: (
+            pipeline.fetch_latest_for_user(uid, mt_store, url)
+            if mt_store
+            else pipeline.fetch_latest_from_channel(url)
+        ),
     )
     try:
         bot.start()
@@ -125,9 +149,9 @@ def run_scheduled() -> int:
         except Exception:  # noqa: BLE001 - keep the scheduler alive
             log.exception("Error in scheduled cycle")
 
-    # Run immediately on start, then on the interval.
-    scheduler.add_job(job, "interval", minutes=interval, id="poll",
-                      next_run_time=None, max_instances=1, coalesce=True)
+    scheduler.add_job(
+        job, "interval", minutes=interval, id="poll", max_instances=1, coalesce=True
+    )
     scheduler.add_job(job, "date", id="first-run")  # fire once now
 
     def _shutdown(signum, _frame):  # noqa: ANN001
@@ -147,6 +171,17 @@ def run_scheduled() -> int:
         if pipeline is not None:
             pipeline.close()
     return 0
+
+
+def _user_status(mt_store, user_id: int) -> str:
+    """Per-user status string for the /status command."""
+    stats = mt_store.user_stats(user_id)
+    return (
+        f"*Your account*\n"
+        f"Channels: {stats['channels']}\n"
+        f"Digests: ✅{stats['done']} done · ⏭{stats['skipped']} skipped · "
+        f"❌{stats['failed']} failed"
+    )
 
 
 def main() -> int:

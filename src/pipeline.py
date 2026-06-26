@@ -164,6 +164,34 @@ class Pipeline:
         return self.summarize_video(video)
 
     # ------------------------------------------------------------------ #
+    # Multi-tenant on-demand methods (Phase 1)
+    # ------------------------------------------------------------------ #
+    def fetch_video_for_user(self, user_id: int, mt_store, url: str) -> str:
+        """Multi-tenant /fetch: check user's digest cache first, else summarize."""
+        video = youtube.get_video(url, proxy=self.settings.proxy_url)
+        # Cache check: does this user already have a done digest?
+        cached = mt_store.get_digest(user_id, video.video_id)
+        if cached:
+            log.info("On-demand cache hit (user %s): %s", user_id, video.video_id)
+            return str(cached)
+        brief = self.summarize_video(video)
+        # Cache in the multi-tenant digests table.
+        vid_id = mt_store.get_or_create_video(video.video_id, video.title)
+        mt_store.mark_digest_done(user_id, vid_id, brief)
+        return brief
+
+    def fetch_latest_for_user(self, user_id: int, mt_store, channel_url: str) -> str:
+        """Multi-tenant /channel: latest video, cached per user."""
+        video = youtube.get_latest_video(channel_url, proxy=self.settings.proxy_url)
+        cached = mt_store.get_digest(user_id, video.video_id)
+        if cached:
+            return str(cached)
+        brief = self.summarize_video(video)
+        vid_id = mt_store.get_or_create_video(video.video_id, video.title)
+        mt_store.mark_digest_done(user_id, vid_id, brief)
+        return brief
+
+    # ------------------------------------------------------------------ #
     def run_cycle(self) -> CycleStats:
         """Run one full poll+process cycle across all channels."""
         stats = CycleStats()
