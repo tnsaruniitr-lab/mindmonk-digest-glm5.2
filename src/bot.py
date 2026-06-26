@@ -166,8 +166,11 @@ class BotHandler:
                 log.info("Async worker started: running pipeline")
                 result = fn()
                 log.info("Async worker done: %d chars to send", len(result))
-                self.send(result)
-                log.info("Async result delivered to Telegram")
+                delivered = self.send(result)
+                if delivered:
+                    log.info("Async result delivered to Telegram")
+                else:
+                    log.error("Async result FAILED to deliver to Telegram (send returned False)")
             except Exception as exc:  # noqa: BLE001
                 log.exception("Async command failed: %s", str(exc)[:200])
                 self.send(f"❌ {exc}")
@@ -248,24 +251,64 @@ class BotHandler:
             self.send("No digests produced yet.")
 
     # ------------------------------------------------------------------ #
-    def send(self, text: str) -> None:
+    def send(self, text: str) -> bool:
+        """Send text to Telegram, splitting if over the 4096-char limit.
+
+        Returns True if all chunks sent successfully, False on any failure.
+        Uses the same splitter as the scheduled-digest path (telegram.py).
+        """
+        from .telegram import _split_message
+
+        chunks = _split_message(text, 4000)  # safe margin under 4096
+        log.info(
+            "Sending Telegram message (%d chars → %d chunk%s): %s",
+            len(text), len(chunks), "s" if len(chunks) > 1 else "",
+            text[:80].replace("\n", " "),
+        )
+        all_ok = True
+        for chunk in chunks:
+            ok = self._send_chunk(chunk)
+            if not ok:
+                all_ok = False
+        return all_ok
+
+    def _send_chunk(self, text: str) -> bool:
+        """Send one chunk. Returns True on success. Retries as plain text
+        if Markdown parsing fails (common for long technical briefs)."""
         url = API_BASE.format(token=self._token, method="sendMessage")
-        log.info("Sending Telegram message (%d chars): %s", len(text), text[:80].replace("\n", " "))
-        try:
-            resp = requests.post(
-                url,
-                json={
-                    "chat_id": self._chat_id,
-                    "text": text,
-                    "parse_mode": "Markdown",
-                    "disable_web_page_preview": True,
-                },
-                timeout=10,
-            )
-            if resp.status_code != 200:
-                log.error("Telegram sendMessage failed (%d): %s", resp.status_code, resp.text[:200])
-        except requests.RequestException as exc:
-            log.warning("Failed to send bot reply: %s", exc)
+        parse_mode = "Markdown"
+        for attempt in range(1, 4):
+            try:
+                resp = requests.post(
+                    url,
+                    json={
+                        "chat_id": self._chat_id,
+                        "text": text,
+                        "parse_mode": parse_mode,
+                        "disable_web_page_preview": True,
+                    },
+                    timeout=15,
+                )
+            except requests.RequestException as exc:
+                log.warning("Send attempt %d failed: %s", attempt, exc)
+                if attempt < 3:
+                    import time as _t; _t.sleep(2 * attempt)
+                continue
+
+            if resp.status_code == 200:
+                return True
+
+            body = resp.text
+            # If Markdown parsing rejected it, retry the chunk as plain text.
+            if resp.status_code == 400 and "parse" in body.lower() and parse_mode:
+                log.warning("Markdown parse failed; retrying chunk as plain text: %s", body[:120])
+                parse_mode = ""
+                continue
+
+            log.error("Telegram sendMessage failed (%d): %s", resp.status_code, body[:200])
+            if attempt < 3:
+                import time as _t; _t.sleep(2 * attempt)
+        return False
 
 
 class ChannelRegistry:
