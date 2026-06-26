@@ -22,6 +22,23 @@ def mt_store():
         pytest.skip("TEST_DATABASE_URL not set; skipping multi-tenant integration test")
     from src.mt_store import MultiTenantStore
 
+    # Ensure the test schema + tables exist (CI's Postgres is fresh).
+    import psycopg
+
+    conn = psycopg.connect(TEST_DB, autocommit=True)
+    conn.execute("DROP SCHEMA IF EXISTS test_mt CASCADE")
+    conn.execute("CREATE SCHEMA test_mt")
+    # Create the multi-tenant tables in the test schema (mirrors the migration).
+    for stmt in [
+        "CREATE TABLE test_mt.users (id BIGSERIAL PRIMARY KEY, telegram_chat_id TEXT UNIQUE, telegram_user_id TEXT UNIQUE, created_at TIMESTAMPTZ DEFAULT now(), tier TEXT DEFAULT 'free', llm_provider TEXT DEFAULT '', llm_api_key_enc TEXT DEFAULT '', profile_yaml TEXT DEFAULT '', preferences_json JSONB DEFAULT '{}'::jsonb, usage_reset_at TIMESTAMPTZ, deleted_at TIMESTAMPTZ)",
+        "CREATE TABLE test_mt.channels (id BIGSERIAL PRIMARY KEY, youtube_handle TEXT, name TEXT NOT NULL, url TEXT UNIQUE, last_polled_at TIMESTAMPTZ, poll_error_count INT DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now())",
+        "CREATE TABLE test_mt.subscriptions (user_id BIGINT REFERENCES test_mt.users(id) ON DELETE CASCADE, channel_id BIGINT REFERENCES test_mt.channels(id) ON DELETE CASCADE, added_at TIMESTAMPTZ DEFAULT now(), PRIMARY KEY (user_id, channel_id))",
+        "CREATE TABLE test_mt.videos (id BIGSERIAL PRIMARY KEY, channel_id BIGINT REFERENCES test_mt.channels(id) ON DELETE SET NULL, youtube_id TEXT UNIQUE, title TEXT DEFAULT '', duration_s REAL DEFAULT 0, published_at TIMESTAMPTZ, transcript_status TEXT DEFAULT 'pending', created_at TIMESTAMPTZ DEFAULT now())",
+        "CREATE TABLE test_mt.digests (id BIGSERIAL PRIMARY KEY, user_id BIGINT REFERENCES test_mt.users(id) ON DELETE CASCADE, video_id BIGINT REFERENCES test_mt.videos(id) ON DELETE CASCADE, tailored_section TEXT DEFAULT '', full_brief TEXT DEFAULT '', status TEXT DEFAULT 'pending', delivered_at TIMESTAMPTZ, tokens_used INT DEFAULT 0, cost_usd REAL DEFAULT 0, created_at TIMESTAMPTZ DEFAULT now(), UNIQUE (user_id, video_id))",
+    ]:
+        conn.execute(stmt)
+    conn.close()
+
     store = MultiTenantStore(TEST_DB, schema="test_mt")
     yield store
     store.close()
@@ -38,7 +55,11 @@ def clean_db(mt_store):
         "channels",
         "users",
     ]:
-        mt_store._conn.execute(f"DELETE FROM {table}")  # noqa: SLF001
+        # Skip tables that don't exist in the test schema (usage_ledger isn't created).
+        try:
+            mt_store._conn.execute(f"DELETE FROM test_mt.{table}")  # noqa: SLF001
+        except Exception:  # noqa: BLE001
+            pass
     yield
 
 
