@@ -23,6 +23,14 @@ db_url = os.getenv("DATABASE_URL", "").strip()
 if not db_url:
     db_url = f"sqlite:///{os.path.abspath('podcast-digest.db')}"
 
+# Normalize the scheme for SQLAlchemy's dialect resolution.
+# psycopg v3 uses the postgresql+psycopg dialect (not the default psycopg2).
+if db_url.startswith("postgres://"):
+    db_url = db_url.replace("postgres://", "postgresql+psycopg://", 1)
+elif db_url.startswith("postgresql://"):
+    if "+" not in db_url.split("://")[0]:
+        db_url = db_url.replace("postgresql://", "postgresql+psycopg://", 1)
+
 config.set_main_option("sqlalchemy.url", db_url)
 
 # We use raw SQL migrations (no SQLAlchemy models / autogenerate).

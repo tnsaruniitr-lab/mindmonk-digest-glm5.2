@@ -6,7 +6,7 @@ order (1→2→3→4) after assembly, header included.
 
 from __future__ import annotations
 
-from src.models import Channel, Transcript, Video
+from src.models import LegacyChannel as Channel, LegacyVideo as Video, Transcript
 from src.prompts import build_main_prompt, build_grading_prompt, system_prompt
 from src.summarizer import _assemble_brief
 from config.settings import Profile
