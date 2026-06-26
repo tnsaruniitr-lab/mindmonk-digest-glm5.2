@@ -98,10 +98,15 @@ class BotHandler:
             return
         for update in resp.json().get("result", []):
             self._offset = update["update_id"] + 1
-            self._handle_update(update)
+            self.handle_update(update)
 
     # ------------------------------------------------------------------ #
-    def _handle_update(self, update: dict) -> None:
+    def handle_update(self, update: dict) -> None:
+        """Process a single Telegram update (from webhook OR long-polling).
+
+        This is the shared entry point. The webhook handler (web.py) calls
+        this directly; the long-polling loop calls it after fetching updates.
+        """
         msg = update.get("message") or update.get("edited_message")
         if not msg:
             return
@@ -134,6 +139,10 @@ class BotHandler:
                 else:
                     log.info("Routed pasted URL to /add")
                     self._cmd_add(user_id, chat_id, text)
+            elif self._looks_like_profile(text):
+                # Multi-line YAML-ish input → save as the user's profile.
+                log.info("Saving profile for user_id=%s", user_id)
+                self._save_profile(user_id, chat_id, text)
             else:
                 log.info("Non-command, non-URL message ignored: %r", text[:60])
         except Exception:  # noqa: BLE001
@@ -149,6 +158,7 @@ class BotHandler:
         dispatch = {
             "/help": lambda: self._cmd_help(chat_id),
             "/start": lambda: self._cmd_start(user_id, chat_id),
+            "/profile": lambda: self._cmd_profile(user_id, chat_id),
             "/list": lambda: self._cmd_list(user_id, chat_id),
             "/add": lambda: self._cmd_add(user_id, chat_id, arg),
             "/status": lambda: self._cmd_status(user_id, chat_id),
@@ -197,8 +207,70 @@ class BotHandler:
             f"I watch YouTube channels and send you sharp, structured briefs "
             f"of new episodes.\n\n"
             f"*Your account:* {stats['channels']} channel(s) subscribed\n\n"
-            f"Use /add <url> to subscribe to a channel, or /fetch <url> to "
-            f"summarize any video now. Type /help for all commands.",
+            f"*Get started:*\n"
+            f"1. Set your profile so briefs are tailored to you — send "
+            f"`/profile` to see/edit it\n"
+            f"2. Add channels: `/add https://www.youtube.com/@channel`\n"
+            f"3. Or summarize any video now: `/fetch <url>`\n\n"
+            f"Type /help for all commands.",
+        )
+
+    def _cmd_profile(self, user_id: int, chat_id: str) -> None:
+        """Show the user's profile (drives section 4 tailored learnings)."""
+        profile = self.mt_store.get_user_profile(user_id) if self.mt_store else ""
+        if profile.strip():
+            self.send(
+                chat_id,
+                f"*Your profile* (drives tailored learnings):\n\n"
+                f"```\n{profile}\n```\n\n"
+                f"To update: send me your profile as YAML, e.g.:\n"
+                f"```\nprofession: Engineer\n"
+                f"goals:\n  - learn ML\n"
+                f"interests:\n  - systems\n"
+                f"current_focus: building things\n```",
+            )
+        else:
+            self.send(
+                chat_id,
+                "*Your profile is empty.*\n\n"
+                "Set it so briefs are tailored to you. Send your profile as YAML:\n"
+                "```\nprofession: <your role>\n"
+                "skill_level: <level>\n"
+                "goals:\n  - <goal 1>\n"
+                "interests:\n  - <interest 1>\n"
+                "current_focus: <what you're working on>\n```",
+            )
+
+    def _looks_like_profile(self, text: str) -> bool:
+        """Heuristic: multi-line text with a YAML-like 'key: value' line."""
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        if len(lines) < 1:
+            return False
+        # At least one line looks like 'key: value' (profile fields).
+        return any(":" in ln and not ln.startswith("http") for ln in lines[:3])
+
+    def _save_profile(self, user_id: int, chat_id: str, text: str) -> None:
+        """Validate and save a YAML profile for the user."""
+        import yaml
+
+        try:
+            data = yaml.safe_load(text)
+            if not isinstance(data, dict):
+                raise ValueError("not a mapping")
+            yaml.safe_dump(data)  # re-serialize to normalize
+        except Exception as exc:  # noqa: BLE001
+            self.send(
+                chat_id,
+                f"⚠️ Couldn't parse that as a profile. Make sure it's valid YAML.\n"
+                f"Error: {exc}",
+            )
+            return
+        if self.mt_store:
+            self.mt_store.set_user_profile(user_id, text.strip())
+        self.send(
+            chat_id,
+            "✅ *Profile saved!* Your digests will now be tailored to this.\n"
+            "Send /profile anytime to view or update it.",
         )
 
     def _cmd_fetch(self, user_id: int, chat_id: str, arg: str) -> None:
@@ -234,6 +306,7 @@ class BotHandler:
             "*Mindmonk Digest* commands:\n"
             "/fetch <video url> — summarize one video now\n"
             "/channel <channel url> — summarize a channel's latest video\n"
+            "/profile — view/edit your profile (tailors briefs to you)\n"
             "/add <url> — register a YouTube channel to watch\n"
             "/list — show your registered channels\n"
             "/remove <n> — remove channel #n from /list\n"

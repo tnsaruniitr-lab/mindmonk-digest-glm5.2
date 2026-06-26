@@ -94,8 +94,8 @@ def run_scheduled() -> int:
 
     scheduler = BlockingScheduler()
 
-    # Web server: serves the landing page on $PORT + debug endpoints.
-    from src.web import set_pipeline
+    # Web server: serves the landing page + webhook + debug endpoints.
+    from src.web import register_telegram_webhook, set_bot_handler, set_pipeline
 
     set_pipeline(pipeline)
     start_web_server()
@@ -137,10 +137,32 @@ def run_scheduled() -> int:
             else pipeline.fetch_latest_from_channel(url)
         ),
     )
-    try:
-        bot.start()
-    except Exception as exc:  # noqa: BLE001
-        log.warning("Bot handler did not start (non-fatal): %s", exc)
+
+    # Register the bot with the web server so the webhook endpoint can dispatch.
+    set_bot_handler(bot)
+
+    # Webhook vs long-polling: use webhook if WEBHOOK_SECRET + public URL are set;
+    # otherwise fall back to long-polling (local dev).
+    webhook_secret = os.getenv("WEBHOOK_SECRET", "").strip()
+    public_url = os.getenv("RAILWAY_PUBLIC_DOMAIN", "").strip()
+    if public_url and not public_url.startswith("http"):
+        public_url = f"https://{public_url}"
+
+    webhook_active = False
+    if webhook_secret and public_url:
+        webhook_active = register_telegram_webhook(
+            settings.telegram.bot_token, public_url, webhook_secret
+        )
+
+    if not webhook_active:
+        # Fallback: long-polling (local dev, or if webhook setup failed).
+        log.info("Using long-polling for bot commands (webhook not active)")
+        try:
+            bot.start()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Bot handler did not start (non-fatal): %s", exc)
+    else:
+        log.info("Bot in webhook mode (long-polling disabled)")
 
     def job() -> None:
         try:

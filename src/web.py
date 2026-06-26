@@ -26,14 +26,23 @@ LANDING_DIR = Path(__file__).resolve().parent.parent / "landing"
 _PIPELINE = None
 
 
+_BOT_HANDLER = None
+
+
 def set_pipeline(pipeline) -> None:
     """Register the pipeline so /debug endpoints can use it."""
     global _PIPELINE
     _PIPELINE = pipeline
 
 
+def set_bot_handler(bot_handler) -> None:
+    """Register the bot handler so the webhook endpoint can dispatch updates."""
+    global _BOT_HANDLER
+    _BOT_HANDLER = bot_handler
+
+
 class Handler(SimpleHTTPRequestHandler):
-    """Serves static files + /debug endpoints."""
+    """Serves static files + webhook + debug endpoints."""
 
     def do_GET(self):  # noqa: N802
         parsed = urllib.parse.urlparse(self.path)
@@ -47,6 +56,50 @@ class Handler(SimpleHTTPRequestHandler):
 
         # Default: serve static files from landing/.
         super().do_GET()
+
+    def do_POST(self):  # noqa: N802
+        """Handle Telegram webhook updates (POST /tg/{secret})."""
+        parsed = urllib.parse.urlparse(self.path)
+        path = parsed.path
+
+        # Telegram webhook: POST /tg/{WEBHOOK_SECRET}
+        if path.startswith("/tg/"):
+            return self._handle_webhook(path)
+
+        self.send_error(404)
+
+    def _handle_webhook(self, path: str) -> None:
+        """Dispatch a Telegram update to the bot handler.
+
+        Validates the webhook secret in the path, then hands the update
+        to BotHandler.handle_update (same path as long-polling).
+        """
+        import json
+        import os
+
+        secret = os.getenv("WEBHOOK_SECRET", "")
+        provided = path.removeprefix("/tg/")
+        if not secret or provided != secret:
+            log.warning("Webhook rejected: bad secret (got %r)", provided[:20])
+            return self._json({"error": "forbidden"}, 403)
+        if _BOT_HANDLER is None:
+            return self._json({"error": "bot not ready"}, 503)
+
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length) if length else b"{}"
+            update = json.loads(body)
+        except Exception:  # noqa: BLE001
+            log.exception("Failed to parse webhook body")
+            return self._json({"error": "bad request"}, 400)
+
+        # Dispatch in the caller's thread (Telegram expects a fast 200 OK;
+        # the bot's handle_update is fast — slow work goes to async threads).
+        try:
+            _BOT_HANDLER.handle_update(update)
+        except Exception:  # noqa: BLE001
+            log.exception("Webhook dispatch error")
+        return self._json({"ok": True})
 
     def _handle_debug_fetch(self, query: str) -> None:
         """Run the real /fetch path directly. Usage: /debug/fetch?v=<video-url>"""
@@ -97,3 +150,28 @@ def start_web_server(port: int | None = None) -> threading.Thread:
     thread = threading.Thread(target=_serve, name="web-server", daemon=True)
     thread.start()
     return thread
+
+
+def register_telegram_webhook(bot_token: str, public_url: str, secret: str) -> bool:
+    """Tell Telegram to send updates to our webhook URL.
+
+    Called on startup when WEBHOOK_SECRET + a public domain are available.
+    Falls back to long-polling if this isn't set (local dev).
+    Returns True on success.
+    """
+    import requests
+
+    webhook_url = f"{public_url.rstrip('/')}/tg/{secret}"
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{bot_token}/setWebhook",
+            json={"url": webhook_url, "allowed_updates": ["message"]},
+            timeout=15,
+        )
+        if resp.status_code == 200 and resp.json().get("ok"):
+            log.info("Telegram webhook set: %s", webhook_url)
+            return True
+        log.error("setWebhook failed (%d): %s", resp.status_code, resp.text[:200])
+    except requests.RequestException as exc:
+        log.error("setWebhook request failed: %s", exc)
+    return False
