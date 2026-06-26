@@ -98,8 +98,10 @@ def run_scheduled() -> int:
 
     scheduler = BlockingScheduler()
 
-    # Web server: serves the landing page on $PORT so Railway exposes a public
-    # URL. Runs in a background thread alongside the scheduler + bot.
+    # Web server: serves the landing page on $PORT + debug endpoints.
+    # Runs in a background thread alongside the scheduler + bot.
+    from src.web import start_web_server, set_pipeline
+    set_pipeline(pipeline)
     start_web_server()
 
     # Interactive bot: handles /add, /list, /status, /latest, /fetch, /channel.
