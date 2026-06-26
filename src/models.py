@@ -1,4 +1,5 @@
 """Core domain dataclasses shared across modules."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

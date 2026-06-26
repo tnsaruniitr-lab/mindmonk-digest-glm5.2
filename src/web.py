@@ -6,6 +6,7 @@ fetch path directly — useful for auditing without going through Telegram.
 
 Uses only the stdlib ``http.server`` — no extra dependency.
 """
+
 from __future__ import annotations
 
 import logging

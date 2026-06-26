@@ -4,6 +4,7 @@ One ``run_cycle`` polls all channels and processes every new long-form video.
 Failures are isolated per video/channel — one bad transcript never stops the
 rest of the cycle.
 """
+
 from __future__ import annotations
 
 import logging
@@ -90,7 +91,7 @@ class Pipeline:
             recent = self.store.list_recent(limit=20)
             for row in recent:
                 if row.status == "done" and row.summary:
-                    return row.summary
+                    return str(row.summary)
         except Exception:  # noqa: BLE001
             return None
         return None
@@ -109,7 +110,7 @@ class Pipeline:
         existing = self.store.get(video.video_id)
         if existing and existing.status == "done" and existing.summary:
             log.info("On-demand cache hit: %s", video.video_id)
-            return existing.summary
+            return str(existing.summary)
 
         if not self._llm_configured:
             raise OnDemandError(
@@ -123,7 +124,8 @@ class Pipeline:
         # 1. Transcript.
         try:
             transcript = transcripts.get_transcript(
-                video, self.settings.app.languages,
+                video,
+                self.settings.app.languages,
                 openai_api_key=self.settings.openai_transcribe_key,
                 proxy=self.settings.proxy_url,
             )
@@ -139,6 +141,7 @@ class Pipeline:
 
         # 2. Summarize.
         try:
+            assert self.summarizer is not None  # checked by _llm_configured above
             brief = self.summarizer.summarize(transcript, self.settings.profile)
         except LLMError as exc:
             self.store.mark_failed(video.video_id, channel_name, note=str(exc))
@@ -183,9 +186,7 @@ class Pipeline:
                 log.error("Channel poll failed, skipping: %s", exc)
                 stats.failed += 1
             except Exception:  # noqa: BLE001 - never let one channel kill the loop
-                log.exception(
-                    "Unexpected error processing channel %s", channel.name
-                )
+                log.exception("Unexpected error processing channel %s", channel.name)
                 stats.failed += 1
         log.info("Cycle complete: %s", stats)
         return stats
@@ -213,7 +214,8 @@ class Pipeline:
             if processed_this_cycle >= max_per_cycle:
                 log.info(
                     "Reached max_per_cycle=%d; deferring remaining new videos "
-                    "to next cycle", max_per_cycle,
+                    "to next cycle",
+                    max_per_cycle,
                 )
                 break
             processed_this_cycle += 1
@@ -226,7 +228,8 @@ class Pipeline:
         # 1. Transcript.
         try:
             transcript = transcripts.get_transcript(
-                video, self.settings.app.languages,
+                video,
+                self.settings.app.languages,
                 openai_api_key=self.settings.openai_transcribe_key,
                 proxy=self.settings.proxy_url,
             )
@@ -257,6 +260,7 @@ class Pipeline:
 
         # 2. Summarize.
         try:
+            assert self.summarizer is not None  # checked by _llm_configured above
             brief = self.summarizer.summarize(transcript, self.settings.profile)
         except LLMError as exc:
             self.store.mark_failed(video.video_id, channel_name, note=str(exc))

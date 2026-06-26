@@ -10,6 +10,7 @@ so ``pipeline.py`` never branches on backend.
 
 ``Store(db_path)`` is the factory: pick backend by presence of DATABASE_URL.
 """
+
 from __future__ import annotations
 
 import os
@@ -242,8 +243,7 @@ class SQLiteStore:
     def list_recent(self, limit: int = 50) -> list[ProcessedVideo]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT * FROM processed_videos "
-                "ORDER BY processed_at DESC LIMIT ?",
+                "SELECT * FROM processed_videos ORDER BY processed_at DESC LIMIT ?",
                 (limit,),
             ).fetchall()
         return [_sqlite_row_to_processed(r) for r in rows]

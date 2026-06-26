@@ -10,10 +10,10 @@ Flow:
 
 Cost: $0.006/min of audio on OpenAI. A 2h podcast ≈ $0.72, split into ~2 chunks.
 """
+
 from __future__ import annotations
 
 import logging
-import os
 import subprocess
 import tempfile
 import time
@@ -61,24 +61,18 @@ def transcribe_via_openai(
         # 1. Download audio as a single low-bitrate mp3.
         audio_path = _download_audio(video.video_id, tmpdir, proxy)
         size = audio_path.stat().st_size
-        log.info(
-            "Downloaded audio for %s: %.1f MB", video.video_id, size / 1e6
-        )
+        log.info("Downloaded audio for %s: %.1f MB", video.video_id, size / 1e6)
 
         # 2. Split into chunks under OpenAI's limit (if needed).
         chunks = _chunk_audio(audio_path, tmpdir)
-        log.info(
-            "Transcribing %s in %d chunk(s)", video.video_id, len(chunks)
-        )
+        log.info("Transcribing %s in %d chunk(s)", video.video_id, len(chunks))
 
         # 3. Transcribe each chunk via OpenAI Whisper.
         texts: list[str] = []
         for i, chunk in enumerate(chunks, 1):
             text = _transcribe_file(chunk, api_key, languages[0])
             texts.append(text)
-            log.info(
-                "Chunk %d/%d done (%d chars)", i, len(chunks), len(text)
-            )
+            log.info("Chunk %d/%d done (%d chars)", i, len(chunks), len(text))
 
     full_text = " ".join(t.strip() for t in texts if t.strip())
     if not full_text:
@@ -99,9 +93,7 @@ def transcribe_via_openai(
 
 
 # --------------------------------------------------------------------------- #
-def _download_audio(
-    video_id: str, outdir: Path, proxy: str | None = None
-) -> Path:
+def _download_audio(video_id: str, outdir: Path, proxy: str | None = None) -> Path:
     """Download audio as a low-bitrate mp3 (mono, 32kbps) to keep size down."""
     url = f"https://www.youtube.com/watch?v={video_id}"
     outtmpl = str(outdir / "audio.%(ext)s")
@@ -109,11 +101,13 @@ def _download_audio(
     opts["outtmpl"] = outtmpl
     # Re-encode to mp3 32k mono during download — smallest viable quality for STT.
     opts["postextractor_args"] = {"ffmpeg": ["-ac", "1", "-b:a", "32k"]}
-    opts["postprocessors"] = [{
-        "key": "FFmpegExtractAudio",
-        "preferredcodec": "mp3",
-        "preferredquality": "32",
-    }]
+    opts["postprocessors"] = [
+        {
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "32",
+        }
+    ]
     if proxy:
         opts["proxy"] = proxy
     try:
@@ -136,9 +130,7 @@ def _chunk_audio(audio_path: Path, outdir: Path) -> list[Path]:
     # Estimate chunk duration: total_duration * (24MB / total_size) * margin.
     duration = _probe_duration(audio_path)
     if not duration:
-        raise TranscribeError(
-            "Could not determine audio duration for chunking."
-        )
+        raise TranscribeError("Could not determine audio duration for chunking.")
     size = audio_path.stat().st_size
     # seconds per chunk, with 10% safety margin
     chunk_dur = duration * (MAX_CHUNK_BYTES / size) * 0.9
@@ -149,10 +141,19 @@ def _chunk_audio(audio_path: Path, outdir: Path) -> list[Path]:
         start = i * chunk_dur
         out = outdir / f"chunk_{i:03d}.mp3"
         cmd = [
-            "ffmpeg", "-y", "-loglevel", "error",
-            "-i", str(audio_path),
-            "-ss", str(start), "-t", str(chunk_dur),
-            "-acodec", "copy", str(out),
+            "ffmpeg",
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(audio_path),
+            "-ss",
+            str(start),
+            "-t",
+            str(chunk_dur),
+            "-acodec",
+            "copy",
+            str(out),
         ]
         subprocess.run(cmd, check=True, capture_output=True)
         chunks.append(out)
@@ -164,10 +165,18 @@ def _probe_duration(path: Path) -> float | None:
     try:
         r = subprocess.run(
             [
-                "ffprobe", "-v", "error", "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1", str(path),
+                "ffprobe",
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=noprint_wrappers=1:nokey=1",
+                str(path),
             ],
-            capture_output=True, text=True, check=True,
+            capture_output=True,
+            text=True,
+            check=True,
         )
         return float(r.stdout.strip())
     except Exception:  # noqa: BLE001
@@ -194,7 +203,7 @@ def _transcribe_file(path: Path, api_key: str, language: str) -> str:
                     timeout=600,  # large chunks can take a while
                 )
             if resp.status_code == 200:
-                return resp.json().get("text", "")
+                return str(resp.json().get("text", ""))
             if resp.status_code == 429:
                 wait = 5 * attempt
                 log.warning("OpenAI 429, waiting %ds (attempt %d)", wait, attempt)

@@ -8,10 +8,12 @@ Exports:
     - poll_channel(channel, lookback_days) -> list[Video]
     - is_long_form(video, min_duration_seconds) -> bool
 """
+
 from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from yt_dlp import YoutubeDL
 
@@ -40,15 +42,22 @@ def _with_proxy(opts: dict, proxy: str | None = None) -> dict:
 def _looks_like_botwall(exc: Exception) -> bool:
     """True if an exception looks like YouTube's 'confirm you're not a bot' wall."""
     msg = str(exc).lower()
-    return any(s in msg for s in (
-        "sign in to confirm", "not a bot", "bot check", "captcha",
-        "confirm your age", "429 too many requests",
-    ))
+    return any(
+        s in msg
+        for s in (
+            "sign in to confirm",
+            "not a bot",
+            "bot check",
+            "captcha",
+            "confirm your age",
+            "429 too many requests",
+        )
+    )
 
 
 def _extract_resilient(
     ydl_opts: dict, target: str, proxy: str | None = None
-) -> dict:
+) -> dict[str, Any]:
     """Run yt-dlp extract_info with a bot-wall retry strategy.
 
     If the first attempt hits YouTube's bot wall, retry through a sequence
@@ -66,7 +75,8 @@ def _extract_resilient(
     # First attempt: the supplied opts (which may already include proxy).
     try:
         with YoutubeDL(ydl_opts) as ydl:
-            return ydl.extract_info(target, download=False)
+            info: dict[str, Any] = ydl.extract_info(target, download=False)
+            return info
     except Exception as exc:
         if not _looks_like_botwall(exc):
             raise
@@ -80,15 +90,16 @@ def _extract_resilient(
         opts["extractor_args"] = {"youtube": {"player_client": [client]}}
         try:
             with YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(target, download=False)
+                recovered: dict[str, Any] = ydl.extract_info(target, download=False)
                 log.info("Recovered via player_client=%s", client)
-                return info
+                return recovered
         except Exception as exc:
             last_exc = exc
             if not _looks_like_botwall(exc):
                 raise
             log.warning("player_client=%s also blocked for %s", client, target)
-    raise last_exc  # type: ignore[misc]
+    assert last_exc is not None
+    raise last_exc
 
 
 def poll_channel(
@@ -159,10 +170,15 @@ def _entries(info: dict) -> list[dict]:
     for entry in entries:
         if entry is None:
             continue
-        if isinstance(entry, dict) and entry.get("_type") in (
-            "playlist",
-            "multi_video",
-        ) and entry.get("entries"):
+        if (
+            isinstance(entry, dict)
+            and entry.get("_type")
+            in (
+                "playlist",
+                "multi_video",
+            )
+            and entry.get("entries")
+        ):
             flat.extend(e for e in entry["entries"] if e)
         else:
             flat.append(entry)
@@ -228,12 +244,15 @@ def get_video(url: str, proxy: str | None = None) -> Video:
     Accepts youtu.be/<id>, watch?v=<id>, or embed/<id>. Used by /fetch.
     Retries with alternate player clients if YouTube's bot wall is hit.
     """
-    opts = _with_proxy({
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
-        "noplaylist": True,
-    }, proxy)
+    opts = _with_proxy(
+        {
+            "quiet": True,
+            "no_warnings": True,
+            "skip_download": True,
+            "noplaylist": True,
+        },
+        proxy,
+    )
     try:
         info = _extract_resilient(opts, url, proxy)
     except Exception as exc:  # noqa: BLE001
@@ -269,7 +288,9 @@ def get_latest_video(channel_url: str, proxy: str | None = None) -> Video:
     """
     normalized = _ensure_videos_tab(channel_url)
     channel = Channel(name=_derive_channel_name(channel_url), url=normalized)
-    videos = poll_channel(channel, lookback_days=365, proxy=proxy)  # broad; we want the latest
+    videos = poll_channel(
+        channel, lookback_days=365, proxy=proxy
+    )  # broad; we want the latest
     if not videos:
         raise YouTubeResolveError(
             f"No uploaded videos found at {channel_url!r}. "

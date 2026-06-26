@@ -7,6 +7,7 @@ like the channel list and your profile.
 Run ``load_settings()`` once at startup; it returns a fully validated
 ``Settings`` object.
 """
+
 from __future__ import annotations
 
 import os
@@ -79,9 +80,7 @@ class LLMConfig(BaseModel):
     def _validate_provider(cls, v: str) -> str:
         v = v.strip().lower()
         if v not in ("openai", "anthropic"):
-            raise ValueError(
-                f"LLM_PROVIDER must be 'openai' or 'anthropic', got {v!r}"
-            )
+            raise ValueError(f"LLM_PROVIDER must be 'openai' or 'anthropic', got {v!r}")
         return v
 
 
@@ -151,7 +150,8 @@ def load_settings() -> Settings:
             grader_model=os.getenv("GRADER_MODEL", ""),
         ),
         groq_api_key=os.getenv("GROQ_API_KEY", ""),
-        openai_transcribe_key=os.getenv("OPENAI_TRANSCRIBE_KEY", "") or os.getenv("OPENAI_API_KEY", ""),
+        openai_transcribe_key=os.getenv("OPENAI_TRANSCRIBE_KEY", "")
+        or os.getenv("OPENAI_API_KEY", ""),
         proxy_url=os.getenv("PROXY_URL", ""),
         config_path=config_path,
         profile_path=profile_path,

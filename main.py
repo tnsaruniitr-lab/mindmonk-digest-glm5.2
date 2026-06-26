@@ -26,25 +26,22 @@ from src.summarizer import LLMError
 from src.telegram import TelegramError
 from src.bot import BotHandler, ChannelRegistry
 from src.web import start_web_server
+from src.logging_config import configure_logging
 
 
 class ConfigError(Exception):
     """Raised when configuration is missing or invalid."""
 
-LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-
 
 def setup_logging(log_dir: Path) -> None:
+    """Configure structured logging (structlog JSON, or text for local dev).
+
+    Also keeps a rotating file handler for local debugging.
+    """
     log_dir.mkdir(parents=True, exist_ok=True)
-    root = logging.getLogger()
-    root.setLevel(logging.INFO)
-    # Avoid duplicate handlers on repeated in-process init.
-    if root.handlers:
-        return
-    fmt = logging.Formatter(LOG_FORMAT)
-    stream = logging.StreamHandler(sys.stdout)
-    stream.setFormatter(fmt)
-    root.addHandler(stream)
+    configure_logging(log_level="INFO")
+    # Add a rotating file handler alongside (local debug; production uses stdout).
+    fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     file_handler = RotatingFileHandler(
         log_dir / "podcast-digest.log",
         maxBytes=2_000_000,
@@ -52,7 +49,7 @@ def setup_logging(log_dir: Path) -> None:
         encoding="utf-8",
     )
     file_handler.setFormatter(fmt)
-    root.addHandler(file_handler)
+    logging.getLogger().addHandler(file_handler)
 
 
 def _load_settings_or_exit():

@@ -11,6 +11,7 @@ kept as a free fallback for the common case where they're available.
 Each step logs its attempt and outcome explicitly so the waterfall is fully
 observable in production logs.
 """
+
 from __future__ import annotations
 
 import logging
@@ -51,9 +52,11 @@ def get_transcript(
         log.info("[STEP 1/2] Attempting OpenAI Whisper (audio → whisper-1)")
         try:
             from .transcribe import transcribe_via_openai, TranscribeError
+
             transcript = transcribe_via_openai(video, openai_api_key, languages, proxy)
             log.info(
-                "[STEP 1/2] ✅ SUCCESS via OpenAI Whisper: %d chars", len(transcript.text)
+                "[STEP 1/2] ✅ SUCCESS via OpenAI Whisper: %d chars",
+                len(transcript.text),
             )
             log.info("=" * 60)
             return transcript
@@ -61,7 +64,11 @@ def get_transcript(
             log.warning("[STEP 1/2] ❌ Whisper failed: %s", str(exc)[:150])
             log.warning("[STEP 1/2] Falling through to STEP 2 (captions)")
         except Exception as exc:  # noqa: BLE001
-            log.warning("[STEP 1/2] ❌ Unexpected Whisper error: %s: %s", type(exc).__name__, str(exc)[:150])
+            log.warning(
+                "[STEP 1/2] ❌ Unexpected Whisper error: %s: %s",
+                type(exc).__name__,
+                str(exc)[:150],
+            )
             log.warning("[STEP 1/2] Falling through to STEP 2 (captions)")
     else:
         log.info("[STEP 1/2] SKIP — OPENAI_TRANSCRIBE_KEY not set")
@@ -72,14 +79,15 @@ def get_transcript(
     log.info("[STEP 2/2] Attempting yt-dlp captions")
     try:
         transcript = _get_captions(video, languages, proxy)
-        log.info(
-            "[STEP 2/2] ✅ SUCCESS via captions: %d chars", len(transcript.text)
-        )
+        log.info("[STEP 2/2] ✅ SUCCESS via captions: %d chars", len(transcript.text))
         log.info("=" * 60)
         return transcript
     except NoTranscriptError:
         log.error("[STEP 2/2] ❌ No captions available either")
-        log.error("WATERFALL EXHAUSTED — both Whisper and captions failed for %s", video.video_id)
+        log.error(
+            "WATERFALL EXHAUSTED — both Whisper and captions failed for %s",
+            video.video_id,
+        )
         log.info("=" * 60)
         raise
 
@@ -111,21 +119,26 @@ def _get_captions(
             except Exception as exc:  # noqa: BLE001
                 raise NoTranscriptError(video.video_id) from exc
 
-        files = sorted(Path(tmpdir).glob(f"{video.video_id}*.vtt")) + \
-                sorted(Path(tmpdir).glob(f"{video.video_id}*.srt"))
+        files = sorted(Path(tmpdir).glob(f"{video.video_id}*.vtt")) + sorted(
+            Path(tmpdir).glob(f"{video.video_id}*.srt")
+        )
         if not files:
             raise NoTranscriptError(video.video_id)
 
         manual = [f for f in files if f.stem.count(".") == 1]
         is_generated = not manual
-        sub_file = (manual[0] if manual else files[0])
+        sub_file = manual[0] if manual else files[0]
         text, lang = _parse_subtitle(sub_file, languages[0])
 
     if not text.strip():
         raise NoTranscriptError(video.video_id)
 
-    log.info("Fetched transcript for %s (%d chars, %s) via yt-dlp",
-             video.video_id, len(text), "generated" if is_generated else "manual")
+    log.info(
+        "Fetched transcript for %s (%d chars, %s) via yt-dlp",
+        video.video_id,
+        len(text),
+        "generated" if is_generated else "manual",
+    )
     return Transcript(
         video=video,
         text=text,
@@ -140,7 +153,6 @@ def _get_captions(
 # --------------------------------------------------------------------------- #
 def _parse_subtitle(path: Path, default_lang: str) -> tuple[str, str]:
     """Parse a VTT or SRT subtitle file into plain text + language code."""
-    import re
 
     raw = path.read_text(encoding="utf-8", errors="ignore")
     stem_parts = path.stem.split(".")
@@ -169,7 +181,7 @@ def _parse_vtt(raw: str) -> str:
             clean = re.sub(r"<[^>]+>", "", line)
             if clean:
                 lines.append(clean)
-    deduped = []
+    deduped: list[str] = []
     for ln in lines:
         if not deduped or deduped[-1] != ln:
             deduped.append(ln)
@@ -186,7 +198,7 @@ def _parse_srt(raw: str) -> str:
             clean = re.sub(r"<[^>]+>", "", line.strip())
             if clean and "-->" not in clean:
                 lines.append(clean)
-    deduped = []
+    deduped: list[str] = []
     for ln in lines:
         if not deduped or deduped[-1] != ln:
             deduped.append(ln)

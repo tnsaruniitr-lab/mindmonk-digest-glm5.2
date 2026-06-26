@@ -1,0 +1,46 @@
+# ruff config — linting + formatting (replaces black + isort + flake8)
+# Phase 0 engineering baseline.
+
+target-version = "py39"
+line-length = 100
+extend-exclude = [".venv", "alembic/versions"]
+
+[lint]
+# Enable a sensible default rule set.
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes (unused imports, undefined names, etc.)
+    "I",    # isort (import ordering)
+    "B",    # flake8-bugbear (likely bugs)
+    "UP",   # pyupgrade (modernize syntax)
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long (formatter handles; we don't block on it)
+    "B008",  # function calls in defaults (common in pydantic/decorators)
+]
+
+[lint.isort]
+known-first-party = ["src", "config"]
+
+[format]
+quote-style = "double"
+
+# mypy config — gradual typing. Strict on src/, lenient elsewhere.
+# Phase 0: get a baseline; tighten over time.
+[[tool.mypy.overrides]]
+module = ["src.*", "config.*"]
+disallow_untyped_defs = false        # gradual: warn, don't fail
+warn_return_any = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+[[tool.mypy.overrides]]
+module = ["yt_dlp.*", "youtube_transcript_api.*", "apscheduler.*"]
+ignore_missing_imports = true        # third-party stubs may not exist
+
+[tool.mypy]
+python_version = "3.9"
+warn_redundant_casts = true

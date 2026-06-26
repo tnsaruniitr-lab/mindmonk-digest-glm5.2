@@ -9,6 +9,7 @@ The brief is two calls:
 
 Both are retried with exponential backoff on transient errors.
 """
+
 from __future__ import annotations
 
 import logging
@@ -68,9 +69,7 @@ class AnthropicClient:
             messages=[{"role": "user", "content": user}],
         )
         # Concatenate text blocks.
-        return "".join(
-            block.text for block in resp.content if hasattr(block, "text")
-        )
+        return "".join(block.text for block in resp.content if hasattr(block, "text"))
 
 
 def _build_client(config: LLMConfig) -> LLMClient:
@@ -120,9 +119,7 @@ class Summarizer:
         return _assemble_brief(transcript, main_text, grading_text)
 
     # ------------------------------------------------------------------ #
-    def _call_with_retry(
-        self, user_prompt: str, model: str, label: str
-    ) -> str:
+    def _call_with_retry(self, user_prompt: str, model: str, label: str) -> str:
         system = prompts.system_prompt()
         last_exc: Exception | None = None
         for attempt in range(1, MAX_RETRIES + 1):
@@ -142,15 +139,15 @@ class Summarizer:
                     backoff,
                 )
                 time.sleep(backoff)
-        raise LLMError(f"LLM {label} call failed after {MAX_RETRIES} attempts") from last_exc
+        raise LLMError(
+            f"LLM {label} call failed after {MAX_RETRIES} attempts"
+        ) from last_exc
 
 
 # --------------------------------------------------------------------------- #
 # Brief assembly
 # --------------------------------------------------------------------------- #
-def _assemble_brief(
-    transcript: Transcript, main_text: str, grading_text: str
-) -> str:
+def _assemble_brief(transcript: Transcript, main_text: str, grading_text: str) -> str:
     """Combine header + sections in the final order (1,2,3,4).
 
     The main call emits sections 1, 2, 4 in order; we split section 4

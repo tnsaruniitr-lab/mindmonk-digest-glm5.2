@@ -13,12 +13,14 @@ commands and pasted URLs. Lets you manage channels from the chat:
 Security: the bot only responds to TELEGRAM_CHAT_ID (you). All other senders
 are ignored, so it's safe to leave public.
 """
+
 from __future__ import annotations
 
 import logging
 import threading
-import time
 from typing import Callable
+
+import os
 
 import requests
 
@@ -56,9 +58,7 @@ class BotHandler:
 
     # ------------------------------------------------------------------ #
     def start(self) -> None:
-        self._thread = threading.Thread(
-            target=self._run, name="tg-bot", daemon=True
-        )
+        self._thread = threading.Thread(target=self._run, name="tg-bot", daemon=True)
         self._thread.start()
         log.info("Bot handler started (long-polling for commands)")
 
@@ -103,7 +103,8 @@ class BotHandler:
         if chat_id != self._chat_id:
             log.warning(
                 "Ignoring message from unauthorized chat %s: %r",
-                chat_id, text[:60],
+                chat_id,
+                text[:60],
             )
             return
         if not text:
@@ -170,10 +171,13 @@ class BotHandler:
                 if delivered:
                     log.info("Async result delivered to Telegram")
                 else:
-                    log.error("Async result FAILED to deliver to Telegram (send returned False)")
+                    log.error(
+                        "Async result FAILED to deliver to Telegram (send returned False)"
+                    )
             except Exception as exc:  # noqa: BLE001
                 log.exception("Async command failed: %s", str(exc)[:200])
                 self.send(f"❌ {exc}")
+
         threading.Thread(target=_worker, name="on-demand", daemon=True).start()
 
     def _cmd_fetch(self, arg: str) -> None:
@@ -189,7 +193,9 @@ class BotHandler:
     def _cmd_channel(self, arg: str) -> None:
         url = arg.strip()
         if not url or "youtube.com" not in url:
-            self.send("Send a channel URL, e.g.:\n/channel https://www.youtube.com/@handle")
+            self.send(
+                "Send a channel URL, e.g.:\n/channel https://www.youtube.com/@handle"
+            )
             return
         self._run_async(
             f"⏳ Finding the latest video + summarizing… (≈30-60s)\n{url}",
@@ -223,10 +229,14 @@ class BotHandler:
     def _cmd_add(self, arg: str) -> None:
         url = arg.strip()
         if not url or "youtube.com" not in url:
-            self.send("Send a YouTube URL, e.g.:\n/add https://www.youtube.com/@channel/videos")
+            self.send(
+                "Send a YouTube URL, e.g.:\n/add https://www.youtube.com/@channel/videos"
+            )
             return
         name = self.registry.add_channel(url)
-        self.send(f"✅ Added: *{name}*\n{url}\n\nIt'll be polled on the next cycle (within 30 min).")
+        self.send(
+            f"✅ Added: *{name}*\n{url}\n\nIt'll be polled on the next cycle (within 30 min)."
+        )
 
     def _cmd_remove(self, arg: str) -> None:
         try:
@@ -262,7 +272,9 @@ class BotHandler:
         chunks = _split_message(text, 4000)  # safe margin under 4096
         log.info(
             "Sending Telegram message (%d chars → %d chunk%s): %s",
-            len(text), len(chunks), "s" if len(chunks) > 1 else "",
+            len(text),
+            len(chunks),
+            "s" if len(chunks) > 1 else "",
             text[:80].replace("\n", " "),
         )
         all_ok = True
@@ -292,7 +304,9 @@ class BotHandler:
             except requests.RequestException as exc:
                 log.warning("Send attempt %d failed: %s", attempt, exc)
                 if attempt < 3:
-                    import time as _t; _t.sleep(2 * attempt)
+                    import time as _t
+
+                    _t.sleep(2 * attempt)
                 continue
 
             if resp.status_code == 200:
@@ -301,13 +315,20 @@ class BotHandler:
             body = resp.text
             # If Markdown parsing rejected it, retry the chunk as plain text.
             if resp.status_code == 400 and "parse" in body.lower() and parse_mode:
-                log.warning("Markdown parse failed; retrying chunk as plain text: %s", body[:120])
+                log.warning(
+                    "Markdown parse failed; retrying chunk as plain text: %s",
+                    body[:120],
+                )
                 parse_mode = ""
                 continue
 
-            log.error("Telegram sendMessage failed (%d): %s", resp.status_code, body[:200])
+            log.error(
+                "Telegram sendMessage failed (%d): %s", resp.status_code, body[:200]
+            )
             if attempt < 3:
-                import time as _t; _t.sleep(2 * attempt)
+                import time as _t
+
+                _t.sleep(2 * attempt)
         return False
 
 
@@ -324,10 +345,7 @@ class ChannelRegistry:
         self.settings = settings
 
     def list_channels(self) -> list[Channel]:
-        return [
-            Channel(name=c.name, url=c.url)
-            for c in self.settings.app.channels
-        ]
+        return [Channel(name=c.name, url=c.url) for c in self.settings.app.channels]
 
     def add_channel(self, url: str) -> str:
         name = _derive_name(url)
@@ -354,7 +372,6 @@ class ChannelRegistry:
 
     def _persist(self) -> None:
         """Re-serialize CONFIG_YAML and update the running config + Railway."""
-        import os
         import yaml
 
         cfg = {
@@ -364,23 +381,36 @@ class ChannelRegistry:
             "languages": self.settings.app.languages,
             "notify_on_no_transcript": self.settings.app.notify_on_no_transcript,
             "channels": [
-                {"name": c.name, "url": c.url}
-                for c in self.settings.app.channels
+                {"name": c.name, "url": c.url} for c in self.settings.app.channels
             ],
         }
         serialized = yaml.safe_dump(cfg, sort_keys=False, allow_unicode=True)
         os.environ["CONFIG_YAML"] = serialized  # keep running process in sync
         # Best-effort persist to Railway (CLI may not be present/linked in all envs).
+        # Project/service/env IDs come from env vars, not hardcoded.
         try:
             import subprocess
 
+            project = os.getenv("RAILWAY_PROJECT_ID", "")
+            service = os.getenv("RAILWAY_SERVICE_NAME", "mindmonk-digest-glm5.2")
+            environment = os.getenv("RAILWAY_ENVIRONMENT", "production")
+            if not project:
+                log.warning(
+                    "RAILWAY_PROJECT_ID not set; cannot persist channel list to Railway"
+                )
+                return
             subprocess.run(
                 [
-                    "railway", "variables",
-                    "-s", "mindmonk-digest-glm5.2",
-                    "-e", "production",
-                    "-p", "1a984e53-d0a9-4682-b170-6352f344ecec",
-                    "--set", f"CONFIG_YAML={serialized}",
+                    "railway",
+                    "variables",
+                    "-s",
+                    service,
+                    "-e",
+                    environment,
+                    "-p",
+                    project,
+                    "--set",
+                    f"CONFIG_YAML={serialized}",
                     "-y",
                 ],
                 check=False,

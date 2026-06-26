@@ -7,6 +7,7 @@ a clean sequence of messages.
 Setup: create a bot via @BotFather, get the token, then find your chat id by
 messaging @userinfobot (or your own bot and reading getUpdates).
 """
+
 from __future__ import annotations
 
 import logging
@@ -72,25 +73,19 @@ class TelegramSender:
 
             body = resp.text
             # If Markdown parsing rejects the message, retry as plain text.
-            if (
-                resp.status_code == 400
-                and "parse" in body.lower()
-                and parse_mode
-            ):
+            if resp.status_code == 400 and "parse" in body.lower() and parse_mode:
                 log.warning(
                     "Markdown parse failed; retrying chunk as plain text: %s",
                     body[:200],
                 )
                 parse_mode = ""
                 last_error = (
-                    f"Telegram sendMessage failed ({resp.status_code}): "
-                    f"{body[:300]}"
+                    f"Telegram sendMessage failed ({resp.status_code}): {body[:300]}"
                 )
                 continue
 
             last_error = (
-                f"Telegram sendMessage failed ({resp.status_code}): "
-                f"{body[:300]}"
+                f"Telegram sendMessage failed ({resp.status_code}): {body[:300]}"
             )
             if attempt < 3:
                 time.sleep(2 * attempt)

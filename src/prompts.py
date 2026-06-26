@@ -8,6 +8,7 @@ Two prompts back the four-section format:
 Keeping grading in its own call means it can run with a different (stronger,
 or differently-aligned) model, and keeps each prompt focused.
 """
+
 from __future__ import annotations
 
 from .models import Transcript
