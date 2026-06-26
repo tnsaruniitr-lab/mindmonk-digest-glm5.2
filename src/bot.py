@@ -98,22 +98,30 @@ class BotHandler:
         if not msg:
             return
         chat_id = str(msg.get("chat", {}).get("id", ""))
+        text = (msg.get("text") or "").strip()
         # Only respond to the authorized owner.
         if chat_id != self._chat_id:
-            log.warning("Ignoring message from unauthorized chat %s", chat_id)
+            log.warning(
+                "Ignoring message from unauthorized chat %s: %r",
+                chat_id, text[:60],
+            )
             return
-        text = (msg.get("text") or "").strip()
         if not text:
             return
+        log.info("Received message: %r", text[:100])
         try:
             if text.startswith("/"):
                 self._handle_command(text)
             elif "youtube.com" in text or "youtu.be" in text:
                 # Pasted URL: route to /fetch if it's a video, /add if a channel.
                 if _is_video_url(text):
+                    log.info("Routed pasted URL to /fetch")
                     self._cmd_fetch(text)
                 else:
+                    log.info("Routed pasted URL to /add")
                     self._cmd_add(text)
+            else:
+                log.info("Non-command, non-URL message ignored: %r", text[:60])
         except Exception:  # noqa: BLE001
             log.exception("Error handling update")
             self.send("⚠️ Something went wrong handling that. Check logs.")
@@ -123,6 +131,7 @@ class BotHandler:
         parts = text.split(maxsplit=1)
         cmd = parts[0].lower().split("@")[0]  # strip @botname suffix
         arg = parts[1].strip() if len(parts) > 1 else ""
+        log.info("Dispatching command: %s arg=%r", cmd, arg[:60])
         dispatch = {
             "/help": lambda: self._cmd_help(),
             "/start": lambda: self._cmd_help(),
@@ -138,6 +147,7 @@ class BotHandler:
         if handler:
             handler()
         else:
+            log.warning("Unknown command: %s", cmd)
             self.send(f"Unknown command: {cmd}\nType /help for the list.")
 
     # ------------------------------------------------------------------ #
@@ -148,13 +158,18 @@ class BotHandler:
 
         Used by /fetch and /channel which take ~30-60s to summarize.
         """
+        log.info("Sending ack + starting async worker")
         self.send(ack_msg)
+
         def _worker() -> None:
             try:
+                log.info("Async worker started: running pipeline")
                 result = fn()
+                log.info("Async worker done: %d chars to send", len(result))
                 self.send(result)
+                log.info("Async result delivered to Telegram")
             except Exception as exc:  # noqa: BLE001
-                log.exception("Async command failed")
+                log.exception("Async command failed: %s", str(exc)[:200])
                 self.send(f"❌ {exc}")
         threading.Thread(target=_worker, name="on-demand", daemon=True).start()
 
@@ -235,8 +250,9 @@ class BotHandler:
     # ------------------------------------------------------------------ #
     def send(self, text: str) -> None:
         url = API_BASE.format(token=self._token, method="sendMessage")
+        log.info("Sending Telegram message (%d chars): %s", len(text), text[:80].replace("\n", " "))
         try:
-            requests.post(
+            resp = requests.post(
                 url,
                 json={
                     "chat_id": self._chat_id,
@@ -246,6 +262,8 @@ class BotHandler:
                 },
                 timeout=10,
             )
+            if resp.status_code != 200:
+                log.error("Telegram sendMessage failed (%d): %s", resp.status_code, resp.text[:200])
         except requests.RequestException as exc:
             log.warning("Failed to send bot reply: %s", exc)
 
