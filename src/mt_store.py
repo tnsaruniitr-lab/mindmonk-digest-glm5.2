@@ -32,10 +32,16 @@ class MultiTenantStore:
         # Normalize the URL for psycopg3 if needed.
         if database_url.startswith("postgres://"):
             database_url = database_url.replace("postgres://", "postgresql://", 1)
-        if "?" not in database_url:
-            database_url += "?sslmode=require"
-        elif "sslmode" not in database_url:
-            database_url += "&sslmode=require"
+        # Require SSL only for remote hosts (Railway/production). Local dev
+        # and CI localhost Postgres don't support SSL and would fail.
+        is_local = any(
+            h in database_url for h in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+        )
+        if not is_local and "sslmode" not in database_url:
+            if "?" not in database_url:
+                database_url += "?sslmode=require"
+            else:
+                database_url += "&sslmode=require"
 
         self._conn = psycopg.connect(database_url, autocommit=True)
         # Optionally isolate to a test schema (for integration tests).
