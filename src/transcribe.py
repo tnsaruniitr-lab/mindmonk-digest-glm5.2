@@ -22,7 +22,7 @@ from pathlib import Path
 import requests
 from yt_dlp import YoutubeDL
 
-from .models import Transcript, Video
+from .models import LegacyVideo as Video, Transcript
 
 log = logging.getLogger(__name__)
 

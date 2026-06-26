@@ -25,7 +25,7 @@ import os
 import requests
 
 from config.settings import Settings
-from .models import Channel
+from .models import LegacyChannel as Channel
 
 log = logging.getLogger(__name__)
 

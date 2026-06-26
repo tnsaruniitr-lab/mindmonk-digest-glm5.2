@@ -5,7 +5,7 @@ metadata (id, title, duration, upload date) WITHOUT downloading anything.
 This avoids the need for a YouTube Data API key.
 
 Exports:
-    - poll_channel(channel, lookback_days) -> list[Video]
+    - poll_channel(channel, lookback_days) -> list[LegacyVideo]
     - is_long_form(video, min_duration_seconds) -> bool
 """
 
@@ -17,7 +17,7 @@ from typing import Any
 
 from yt_dlp import YoutubeDL
 
-from .models import Channel, Video
+from .models import LegacyChannel, LegacyVideo
 
 log = logging.getLogger(__name__)
 
@@ -103,8 +103,8 @@ def _extract_resilient(
 
 
 def poll_channel(
-    channel: Channel, lookback_days: int = 14, proxy: str | None = None
-) -> list[Video]:
+    channel: LegacyChannel, lookback_days: int = 14, proxy: str | None = None
+) -> list[LegacyVideo]:
     """List recent uploads from a channel, newest entries first.
 
     Only videos uploaded within ``lookback_days`` are returned, which keeps
@@ -125,7 +125,7 @@ def poll_channel(
 
     entries = _entries(info)
     cutoff = datetime.now(tz=timezone.utc) - timedelta(days=lookback_days)
-    videos: list[Video] = []
+    videos: list[LegacyVideo] = []
     for entry in entries:
         video = _entry_to_video(entry, channel)
         if video is None:
@@ -142,7 +142,7 @@ def poll_channel(
     return videos
 
 
-def is_long_form(video: Video, min_duration_seconds: float) -> bool:
+def is_long_form(video: LegacyVideo, min_duration_seconds: float) -> bool:
     """Apply the long-form duration filter.
 
     Treats unknown duration (0/None) conservatively by including the video,
@@ -185,8 +185,8 @@ def _entries(info: dict) -> list[dict]:
     return flat
 
 
-def _entry_to_video(entry: dict, channel: Channel) -> Video | None:
-    """Convert a yt-dlp flat entry into a Video, skipping unusable entries."""
+def _entry_to_video(entry: dict, channel: LegacyChannel) -> LegacyVideo | None:
+    """Convert a yt-dlp flat entry into a LegacyVideo, skipping unusable entries."""
     video_id = entry.get("id")
     title = entry.get("title") or "(untitled)"
     if not video_id:
@@ -207,7 +207,7 @@ def _entry_to_video(entry: dict, channel: Channel) -> Video | None:
     else:
         url = f"https://www.youtube.com/watch?v={video_id}"
 
-    return Video(
+    return LegacyVideo(
         video_id=video_id,
         title=title,
         url=url,
@@ -238,8 +238,8 @@ class YouTubeResolveError(Exception):
 # --------------------------------------------------------------------------- #
 # On-demand resolution (for /fetch and /channel bot commands)
 # --------------------------------------------------------------------------- #
-def get_video(url: str, proxy: str | None = None) -> Video:
-    """Resolve a single video URL to a Video (with metadata, no download).
+def get_video(url: str, proxy: str | None = None) -> LegacyVideo:
+    """Resolve a single video URL to a LegacyVideo (with metadata, no download).
 
     Accepts youtu.be/<id>, watch?v=<id>, or embed/<id>. Used by /fetch.
     Retries with alternate player clients if YouTube's bot wall is hit.
@@ -266,11 +266,11 @@ def get_video(url: str, proxy: str | None = None) -> Video:
     if info.get("live_status") in ("is_upcoming", "is_live"):
         raise YouTubeResolveError("That video is live or upcoming — no transcript yet.")
 
-    channel = Channel(
+    channel = LegacyChannel(
         name=info.get("channel") or info.get("uploader") or "YouTube",
         url=info.get("channel_url") or info.get("uploader_url") or "",
     )
-    return Video(
+    return LegacyVideo(
         video_id=video_id,
         title=title,
         url=f"https://www.youtube.com/watch?v={video_id}",
@@ -280,14 +280,14 @@ def get_video(url: str, proxy: str | None = None) -> Video:
     )
 
 
-def get_latest_video(channel_url: str, proxy: str | None = None) -> Video:
+def get_latest_video(channel_url: str, proxy: str | None = None) -> LegacyVideo:
     """Resolve a channel URL to its most recent uploaded video. Used by /channel.
 
     Polls the channel's uploads and returns the newest one (skipping
     live/upcoming). Accepts @handle, /channel/, /user/, /c/, or /videos URLs.
     """
     normalized = _ensure_videos_tab(channel_url)
-    channel = Channel(name=_derive_channel_name(channel_url), url=normalized)
+    channel = LegacyChannel(name=_derive_channel_name(channel_url), url=normalized)
     videos = poll_channel(
         channel, lookback_days=365, proxy=proxy
     )  # broad; we want the latest

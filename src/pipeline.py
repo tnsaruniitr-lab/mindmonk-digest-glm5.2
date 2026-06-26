@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 
 from config.settings import Settings
-from .models import Channel, Video
+from .models import LegacyChannel as Channel, LegacyVideo as Video
 from .store import Store
 from . import transcripts, youtube
 from .summarizer import LLMError, Summarizer
