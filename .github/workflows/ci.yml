@@ -1,5 +1,5 @@
-# Phase 0 CI: lint → typecheck → test on every push and PR.
-# Fast feedback; fails the build on any red step.
+# Phase 0/1 CI: lint → typecheck → test on every push and PR.
+# Uses a Postgres service container for the multi-tenant migration + integration tests.
 name: CI
 
 on:
@@ -11,6 +11,25 @@ on:
 jobs:
   quality:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: mindmonk
+          POSTGRES_PASSWORD: dev
+          POSTGRES_DB: mindmonk_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mindmonk"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_URL: postgresql://mindmonk:dev@localhost:5432/mindmonk_test
+
     steps:
       - uses: actions/checkout@v4
 
@@ -34,12 +53,13 @@ jobs:
       - name: Type check (mypy)
         run: mypy src/ config/
 
-      - name: Test (pytest, SQLite — no external services)
-        run: pytest tests/ -v
-
-      - name: Migration smoke (alembic builds schema from scratch)
+      - name: Migration smoke (alembic builds schema from scratch on Postgres)
         env:
-          DATABASE_URL: "sqlite:///ci-test.db"
+          DATABASE_URL: ${{ env.TEST_DATABASE_URL }}
+          TELEGRAM_CHAT_ID: "999999"
         run: |
           alembic upgrade head
-          python -c "import sqlite3; c=sqlite3.connect('ci-test.db'); print('tables:', [r[0] for r in c.execute(\"SELECT name FROM sqlite_master WHERE type='table'\").fetchall()])"
+          python -c "import psycopg; c=psycopg.connect('$DATABASE_URL'); cur=c.cursor(); cur.execute(\"SELECT count(*) FROM information_schema.tables WHERE table_schema='public'\"); print('tables:', cur.fetchone()[0])"
+
+      - name: Test (pytest — unit + multi-tenant integration)
+        run: pytest tests/ -v
