@@ -37,6 +37,60 @@ def _with_proxy(opts: dict, proxy: str | None = None) -> dict:
     return dict(opts)
 
 
+def _looks_like_botwall(exc: Exception) -> bool:
+    """True if an exception looks like YouTube's 'confirm you're not a bot' wall."""
+    msg = str(exc).lower()
+    return any(s in msg for s in (
+        "sign in to confirm", "not a bot", "bot check", "captcha",
+        "confirm your age", "429 too many requests",
+    ))
+
+
+def _extract_resilient(
+    ydl_opts: dict, target: str, proxy: str | None = None
+) -> dict:
+    """Run yt-dlp extract_info with a bot-wall retry strategy.
+
+    If the first attempt hits YouTube's bot wall, retry through a sequence
+    of player clients (ios, web_safari, mweb, tv) which sometimes dodge it.
+    If a proxy is set and the direct request was blocked, the proxy is
+    already in ydl_opts; if no proxy was set, we still try client rotation.
+    Raises the last error if all attempts fail.
+    """
+    if proxy:
+        log.info("yt-dlp via proxy (%s) for %s", proxy.split("@")[-1], target)
+    else:
+        log.info("yt-dlp direct (no proxy) for %s", target)
+
+    last_exc: Exception | None = None
+    # First attempt: the supplied opts (which may already include proxy).
+    try:
+        with YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(target, download=False)
+    except Exception as exc:
+        if not _looks_like_botwall(exc):
+            raise
+        last_exc = exc
+        log.warning("Bot wall hit on %s; rotating player clients...", target)
+
+    # Retry with alternate player clients.
+    base = {k: v for k, v in ydl_opts.items() if k != "extractor_args"}
+    for client in ("ios", "web_safari", "mweb", "tv", "tv_embedded"):
+        opts = _with_proxy(base, proxy)
+        opts["extractor_args"] = {"youtube": {"player_client": [client]}}
+        try:
+            with YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(target, download=False)
+                log.info("Recovered via player_client=%s", client)
+                return info
+        except Exception as exc:
+            last_exc = exc
+            if not _looks_like_botwall(exc):
+                raise
+            log.warning("player_client=%s also blocked for %s", client, target)
+    raise last_exc  # type: ignore[misc]
+
+
 def poll_channel(
     channel: Channel, lookback_days: int = 14, proxy: str | None = None
 ) -> list[Video]:
@@ -172,6 +226,7 @@ def get_video(url: str, proxy: str | None = None) -> Video:
     """Resolve a single video URL to a Video (with metadata, no download).
 
     Accepts youtu.be/<id>, watch?v=<id>, or embed/<id>. Used by /fetch.
+    Retries with alternate player clients if YouTube's bot wall is hit.
     """
     opts = _with_proxy({
         "quiet": True,
@@ -179,11 +234,10 @@ def get_video(url: str, proxy: str | None = None) -> Video:
         "skip_download": True,
         "noplaylist": True,
     }, proxy)
-    with YoutubeDL(opts) as ydl:
-        try:
-            info = ydl.extract_info(url, download=False)
-        except Exception as exc:  # noqa: BLE001
-            raise YouTubeResolveError(f"Could not resolve video {url!r}: {exc}") from exc
+    try:
+        info = _extract_resilient(opts, url, proxy)
+    except Exception as exc:  # noqa: BLE001
+        raise YouTubeResolveError(f"Could not resolve video {url!r}: {exc}") from exc
 
     if not info or not info.get("id"):
         raise YouTubeResolveError(f"No video found at {url!r}")
